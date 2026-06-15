@@ -264,7 +264,7 @@ _KU_PROMPT = """\
 ٢. وشەی "خوا" بەپێی دیمەن: ئەنیمی/فانتازیا → "خواوەند"، فیلمی ڕاستەقینە → "خوا".
 ٣. ئاستی سانسۆر: سانسۆری زۆر کەم و سووک (بە گشتی قسە نەشیاو و نەفرەتییەکان وەک خۆی بهێڵەرەوە، بەڵام وشە سێکسییە زۆر ناپەسەندەکان بگۆڕە بۆ هاوتاییەکی کوردی کەمێک گونجاوتر).
 ٤. قسەی ئاشکرا، خەیاڵ، مونۆلۆگی ناوەخۆیی، و چرپە بە تەواوی وەربگێڕە.
-٥. کاتەکان دەبێت ١٠٠٪ ڕێک بن لەگەڵ دەنگەکە.
+٥. کاتەکان دەبێت ١٠٪ ڕێک بن لەگەڵ دەنگەکە.
 ٦. زۆر گرنگ: بە هیچ شێوەیەک نەوەستیت تا کۆتا چرکەی ڤیدیۆکە! دەبێت هەموو قسەکان وەربگێڕیت بێ ئەوەی هیچ جێبهێڵیت.
 ٧. تەنها یەک ستەرە لە یەک کاتدا.
 ٨. لابردنی تەواوی خاڵبەندی و هێماکان: بە هیچ شێوەیەک هێماکانی خاڵبەندی و ماردکداون وەک (؟ . : ! ، ، " ' - _ ? !) بەکارمەهێنە. تەنها دەقێکی کوردی یەکدەست بنووسە بێ هیچ هێمایەک.
@@ -283,7 +283,7 @@ YOUR MISSION: Craft a world-class English subtitle track for every second of thi
 CINEMATIC RULES:
 1. MEANING, NOT WORDS.
 2. MINIMAL CENSORSHIP: Keep general bad/vulgar words. Only translate highly offensive/explicit sexual terms into slightly milder equivalents.
-3. INNER MONOLOGUES, THOUGHTS, & WHISPERS MUST BE TRANSLATED.
+3. INNER MONOLOGUES, THOUGHT, & WHISPERS MUST BE TRANSLATED.
 4. TRUE AUDIO SYNC.
 5. NO CHARACTER NAMES.
 6. STRIKE OUT ALL PUNCTUATION: Do not use punctuation marks like (?, . : ! ' - _). Only plain clean text.
@@ -362,6 +362,8 @@ def gemini_translate(api_key: str, video_path: str, direction: str, existing_raw
     chunk_duration = 300.0 
     bar = st.progress(min(current_start / dur, 1.0) if dur > 0 else 0.0, "🧠 خەریکی وەرگێڕانە پارچە بە پارچە…")
 
+    max_retries = 15
+
     while current_start < dur:
         current_end = min(current_start + chunk_duration, dur)
         start_str = float_to_ass_time(current_start)
@@ -370,7 +372,6 @@ def gemini_translate(api_key: str, video_path: str, direction: str, existing_raw
         prompt = base_prompt.format(start_time=start_str, end_time=end_str)
         
         chunk_text = ""
-        max_retries = 5 
         
         for attempt in range(max_retries):
             try:
@@ -388,13 +389,8 @@ def gemini_translate(api_key: str, video_path: str, direction: str, existing_raw
                     break
             except Exception as e:
                 error_msg = str(e)
-                if "503" in error_msg or "429" in error_msg or "RESOURCE_EXHAUSTED" in error_msg:
-                    # گۆڕانکاری بۆ زۆرترین خێرایی: لێرە تەنها ٥ چرکە دەوەستێت بۆ هەوڵدانەوەی خێرا
-                    st.warning(f"⚠️ لیمیتی گووگڵ گەیشتە سنوور! ٥ چرکە چاوەڕێ دەکەین و یەکسەر هەوڵ دەدەینەوە... (هەوڵی {attempt+1}/{max_retries})")
-                    time.sleep(5)
-                else:
-                    st.warning(f"⚠️ هەڵەیەک ڕوویدا: {error_msg}")
-                    time.sleep(2)
+                st.warning(f"⚠️ هەوڵی {attempt+1}/{max_retries} لەگەڵ گووگڵ سەرکەوتوو نەبوو. دەقی هەڵەکە: \n`{error_msg}`")
+                time.sleep(5)
 
         if not chunk_text:
             st.error(f"❌ نەتوانرا پارچەی {start_str} بۆ {end_str} وەربگێڕدرێت. تکایە دواتر کلیک لە 'بەردەوام بوون' بکە.")
@@ -413,7 +409,6 @@ def gemini_translate(api_key: str, video_path: str, direction: str, existing_raw
         if dur - current_start <= 2.0:
             break
             
-        # پشوودانی نێوان پارچەکان سڕایەوە بۆ زۆرترین خێرایی و بێ پچڕان
         time.sleep(1)
 
     if current_start >= dur - 2.0:
@@ -427,7 +422,7 @@ def gemini_translate(api_key: str, video_path: str, direction: str, existing_raw
     return _dedup("\n".join(chunks))
 
 # ══════════════════════════════════════════════════════════
-#  FFMPEG
+#  FFMPEG (Optimized for File Size)
 # ══════════════════════════════════════════════════════════
 def _run(cmd: list):
     r = subprocess.run(cmd, capture_output=True, text=True)
@@ -441,8 +436,8 @@ def burn_subtitles(in_path: str, ass_path: str, out_path: str):
         "-i", in_path,
         "-vf", vf,
         "-c:v", "libx264",
-        "-crf", "23",
-        "-preset", "ultrafast",
+        "-crf", "25",       # کوالیتی نایاب بەڵام قەبارەی زۆر بچووکتر
+        "-preset", "veryfast",  # خێرا و گونجاوترین کۆمپرێس لەبری ultrafast
         "-c:a", "aac",
         "-b:a", "128k",
         "-threads", "0",
