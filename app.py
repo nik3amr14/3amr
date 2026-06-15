@@ -389,11 +389,12 @@ def gemini_translate(api_key: str, video_path: str, direction: str, existing_raw
             except Exception as e:
                 error_msg = str(e)
                 if "503" in error_msg or "429" in error_msg or "RESOURCE_EXHAUSTED" in error_msg:
-                    st.warning(f"⚠️ سێرڤەری گووگڵ قەرەباڵغە یان لیمیتی وشەکان تەواو بووە. ٣٠ چرکە چاوەڕێ دەکەین... (هەوڵی {attempt+1}/{max_retries})")
-                    time.sleep(30)
+                    # گۆڕانکاری بۆ زۆرترین خێرایی: لێرە تەنها ٥ چرکە دەوەستێت بۆ هەوڵدانەوەی خێرا
+                    st.warning(f"⚠️ لیمیتی گووگڵ گەیشتە سنوور! ٥ چرکە چاوەڕێ دەکەین و یەکسەر هەوڵ دەدەینەوە... (هەوڵی {attempt+1}/{max_retries})")
+                    time.sleep(5)
                 else:
                     st.warning(f"⚠️ هەڵەیەک ڕوویدا: {error_msg}")
-                    time.sleep(10)
+                    time.sleep(2)
 
         if not chunk_text:
             st.error(f"❌ نەتوانرا پارچەی {start_str} بۆ {end_str} وەربگێڕدرێت. تکایە دواتر کلیک لە 'بەردەوام بوون' بکە.")
@@ -412,12 +413,8 @@ def gemini_translate(api_key: str, video_path: str, direction: str, existing_raw
         if dur - current_start <= 2.0:
             break
             
-        # ⏳ چاوەڕوانیی ٥٠ چرکەی تەواو لە نێوان پارچەکاندا بۆ ڕێگریکردن لە بلۆککردنی ئەکاونتی فری
-        if current_start < dur:
-            with st.empty():
-                for i in range(50, 0, -1):
-                    st.warning(f"⏳ پاراستنی سێرڤەر لە بلۆکبوون: {i} چرکە چاوەڕێ دەکەین تا لیمیتی وشەکانی گووگڵ (Tokens) نوێ دەبێتەوە...")
-                    time.sleep(1)
+        # پشوودانی نێوان پارچەکان سڕایەوە بۆ زۆرترین خێرایی و بێ پچڕان
+        time.sleep(1)
 
     if current_start >= dur - 2.0:
         bar.progress(1.0, "✅ وەرگێڕان ١٠٠٪ تەواو!")
@@ -653,11 +650,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
-# ══════════════════════════════════════════════════════════
-#  HOW TO UPLOAD THE FONT ON GITHUB MOBILE:
-# ══════════════════════════════════════════════════════════
-# ڕوونکردنەوەی بارکردنی فۆنتەکەت (Bahij Janna-Bold.ttf):
-# دوای ئەوەی ئەم ٣ فایلەت دروستکرد، بگەڕێوە لاپەڕەی سەرەکی پڕۆژەکەت لە گیتھاب.
-# لە سەرەوە کلیک لەسەر دوگمەی "Add file" بکە و پاشان "Upload files" هەڵبژێرە.
-# فایلی فۆنتەکەت لە مۆبایلەکەتەوە بار بکە و سەیڤی بکە (Commit).
