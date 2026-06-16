@@ -244,6 +244,8 @@ Output format (ALWAYS return a JSON array of the EXACT SAME LENGTH as input):
 """
     user_prompt = f"Translate ALL of these cues without skipping any:\n{json.dumps(transcript_chunk, ensure_ascii=False)}"
     
+    status_msg = st.empty() # بۆکسێکی بەتاڵ بۆ ئەوەی نامەکان لەسەر یەک کەڵەکە نەبن
+    
     for attempt in range(30):
         try:
             resp = client.models.generate_content(
@@ -252,14 +254,18 @@ Output format (ALWAYS return a JSON array of the EXACT SAME LENGTH as input):
                 config=types.GenerateContentConfig(system_instruction=system_prompt, temperature=0.2, response_mime_type="application/json")
             )
             data = extract_json(resp.text)
+            status_msg.empty() # سڕینەوەی نامەکە ئەگەر سەرکەوتوو بوو
             if data: return data
         except Exception as e:
             error_msg = str(e)
             if "503" in error_msg or "429" in error_msg or "RESOURCE_EXHAUSTED" in error_msg:
-                st.warning(f"⚠️ سێرڤەری گووگڵ قەرەباڵغە. ٥ چرکە دەوەستین... (هەوڵی {attempt+1}/30)")
+                # تەنها یەک نامە پیشان دەدات و خۆی نوێ دەکاتەوە بێ ئەوەی شاشە پڕ بکات
+                status_msg.warning(f"⚠️ هێرشکردنە سەر سێرڤەری گووگڵ بۆ وەرگرتنی وەڵام... (هەوڵی {attempt+1}/30)")
                 time.sleep(5)
             else:
                 time.sleep(2)
+                
+    status_msg.empty()
     return []
 
 # ══════════════════════════════════════════════════════════
@@ -404,9 +410,14 @@ def process_full_video(api_key, video_path):
 # ══════════════════════════════════════════════════════════
 #  ASS & SRT BUILDERS
 # ══════════════════════════════════════════════════════════
+def hex_to_ass(h: str) -> str:
+    # گۆڕینی ڕەنگی هێکس بۆ فۆرماتی ASS (کە پێچەوانەیە: BGR)
+    h = h.lstrip("#").upper().ljust(6, "0")
+    return f"&H00{h[4:6]}{h[2:4]}{h[0:2]}&"
+
 def build_ass_file(cues, font_size, wm_text, wm_color, wm_font_size, wm_alignment):
     font_name = find_kurdish_font()
-    wm_ass = f"&H00{wm_color.lstrip('#')[4:6]}{wm_color.lstrip('#')[2:4]}{wm_color.lstrip('#')[0:2]}"
+    wm_ass = hex_to_ass(wm_color)
     
     ass = [
         "[Script Info]\nScriptType: v4.00+\nPlayResX: 1280\nPlayResY: 720\nScaledBorderAndShadow: yes\n",
@@ -430,7 +441,9 @@ def build_srt_file(cues):
     for idx, c in enumerate(cues, start=1):
         s = sec_to_srt(secs(c["start"]))
         e = sec_to_srt(secs(c["end"]))
-        lines.append(f"{idx}\n{s} --> {e}\n{clean_punctuation(c['text'])}\n")
+        # سڕینەوەی تاگەکانی ڕەنگ لە SRT چونکە SRT پشتگیری ڕەنگ ناکات وەک ASS
+        clean_txt = re.sub(r'\{\\[^}]*\}', '', c['text'])
+        lines.append(f"{idx}\n{s} --> {e}\n{clean_punctuation(clean_txt)}\n")
     return "\n".join(lines)
 
 def burn_subtitles(video_path, ass_path, output_path):
@@ -465,9 +478,11 @@ def main():
         with c1:
             anime_name = st.text_input("🎬 ناوی فیلم / زنجیرە (بۆ گۆشەی سەرەوە)")
             translator_name = st.text_input("✍️ ناوی وەرگێڕ")
+            translator_color = st.color_picker("🎨 ڕەنگی ناوی وەرگێڕ", "#00FF00") # ڕەنگی سەوز بە بنەڕەتی
         with c2:
             season_ep = st.text_input("📺 سیزن / ئەڵقە")
             tech_name = st.text_input("💻 ناوی تەکنیک")
+            tech_color = st.color_picker("🎨 ڕەنگی ناوی تەکنیک", "#00FFFF") # ڕەنگی شین باو بە بنەڕەتی
             
         intro_duration = st.number_input("⏱️ کاتی مانەوەی ناوەکانی دەستپێک (بە چرکە)", min_value=1.0, max_value=15.0, value=3.0, step=0.5)
 
@@ -475,7 +490,7 @@ def main():
         st.subheader("🎨 واتەرمارکی نووسین (لۆگۆ)")
         wc1, wc2, wc3, wc4 = st.columns(4)
         with wc1: wm_text = st.text_input("📝 نووسینی واتەرمارک")
-        with wc2: wm_color = st.color_picker("🎨 ڕەنگی نووسینەکە", "#FFFFFF")
+        with wc2: wm_color = st.color_picker("🎨 ڕەنگی لۆگۆ", "#FFFFFF")
         with wc3: wm_font_size = st.slider("📏 قەبارە", 10, 150, 30)
         with wc4: 
             wm_pos = st.selectbox("📍 شوێن", ["چەپ", "ڕاست"])
@@ -527,21 +542,23 @@ def main():
                 current_intro_time = 0.0
                 if translator_name: 
                     end_time = current_intro_time + intro_duration
+                    c_tag = f"{{\\c{hex_to_ass(translator_color)}}}"
                     intro.append({
                         "start": float_to_ass_time(current_intro_time), 
                         "end": float_to_ass_time(end_time), 
                         "alignment_tag": "{\\an2}", 
-                        "text": f"وەرگێڕان\\N{translator_name}"
+                        "text": f"{c_tag}وەرگێڕان\\N{translator_name}"
                     })
                     current_intro_time = end_time
                     
                 if tech_name: 
                     end_time = current_intro_time + intro_duration
+                    c_tag = f"{{\\c{hex_to_ass(tech_color)}}}"
                     intro.append({
                         "start": float_to_ass_time(current_intro_time), 
                         "end": float_to_ass_time(end_time), 
                         "alignment_tag": "{\\an2}", 
-                        "text": f"تەکنیک\\N{tech_name}"
+                        "text": f"{c_tag}تەکنیک\\N{tech_name}"
                     })
                     current_intro_time = end_time
 
