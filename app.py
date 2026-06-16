@@ -37,24 +37,35 @@ FORMAT_MAP = {
 }
 
 def find_kurdish_font():
-    ku_font_src = os.path.join(ROOT_DIR, "Bahij Janna-Bold.ttf")
-    if os.path.exists(ku_font_src):
-        shutil.copy(ku_font_src, "/tmp/Bahij Janna-Bold.ttf")
-        return "Bahij Janna"
+    # گەڕان لە زۆرترین شوێن بۆ دڵنیابوونەوە لە دۆزینەوەی فۆنتەکە لەسەر هەموو جۆرە سێرڤەرێک
+    possible_paths = [
+        os.path.join(APP_DIR, KU_FONT_FILE),
+        os.path.join(ROOT_DIR, KU_FONT_FILE),
+        KU_FONT_FILE,
+        os.path.join(os.path.dirname(APP_DIR), KU_FONT_FILE)
+    ]
+    
+    ku_font_src = None
+    for path in possible_paths:
+        if os.path.exists(path) and os.path.getsize(path) > 10_000:
+            ku_font_src = path
+            break
+            
+    if ku_font_src:
+        shutil.copy(ku_font_src, KU_FONT_PATH)
+        return KU_FONT_NAME
         
     candidates = [
         "/usr/share/fonts/truetype/noto/NotoSansArabic-Regular.ttf",
         "/usr/share/fonts/truetype/noto/NotoNaskhArabic-Regular.ttf",
         "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
-        "/tmp/Bahij Janna-Bold.ttf",
-        "Bahij Janna-Bold.ttf",
         "NotoSansArabic-Regular.ttf",
         "NotoNaskhArabic-Regular.ttf",
     ]
 
     for path in candidates:
         if os.path.exists(path):
-            return "Bahij Janna" if "Bahij" in path else "Noto Sans Arabic"
+            return "Noto Sans Arabic"
     return "Arial"
 
 def escape_ass(text: str) -> str:
@@ -213,7 +224,7 @@ def validate_cues(cues):
     return validated
 
 # ══════════════════════════════════════════════════════════
-#  GEMINI TRANSLATION
+#  GEMINI TRANSLATION (100% Human-like & Strict)
 # ══════════════════════════════════════════════════════════
 def gemini_translate(client, transcript_chunk, pass_number=1):
     system_prompt = """
@@ -244,7 +255,7 @@ Output format (ALWAYS return a JSON array of the EXACT SAME LENGTH as input):
 """
     user_prompt = f"Translate ALL of these cues without skipping any:\n{json.dumps(transcript_chunk, ensure_ascii=False)}"
     
-    status_msg = st.empty() # بۆکسێکی بەتاڵ بۆ ئەوەی نامەکان لەسەر یەک کەڵەکە نەبن
+    status_msg = st.empty()
     
     for attempt in range(30):
         try:
@@ -254,12 +265,11 @@ Output format (ALWAYS return a JSON array of the EXACT SAME LENGTH as input):
                 config=types.GenerateContentConfig(system_instruction=system_prompt, temperature=0.2, response_mime_type="application/json")
             )
             data = extract_json(resp.text)
-            status_msg.empty() # سڕینەوەی نامەکە ئەگەر سەرکەوتوو بوو
+            status_msg.empty()
             if data: return data
         except Exception as e:
             error_msg = str(e)
             if "503" in error_msg or "429" in error_msg or "RESOURCE_EXHAUSTED" in error_msg:
-                # تەنها یەک نامە پیشان دەدات و خۆی نوێ دەکاتەوە بێ ئەوەی شاشە پڕ بکات
                 status_msg.warning(f"⚠️ هێرشکردنە سەر سێرڤەری گووگڵ بۆ وەرگرتنی وەڵام... (هەوڵی {attempt+1}/30)")
                 time.sleep(5)
             else:
@@ -411,7 +421,6 @@ def process_full_video(api_key, video_path):
 #  ASS & SRT BUILDERS
 # ══════════════════════════════════════════════════════════
 def hex_to_ass(h: str) -> str:
-    # گۆڕینی ڕەنگی هێکس بۆ فۆرماتی ASS (کە پێچەوانەیە: BGR)
     h = h.lstrip("#").upper().ljust(6, "0")
     return f"&H00{h[4:6]}{h[2:4]}{h[0:2]}&"
 
@@ -441,7 +450,6 @@ def build_srt_file(cues):
     for idx, c in enumerate(cues, start=1):
         s = sec_to_srt(secs(c["start"]))
         e = sec_to_srt(secs(c["end"]))
-        # سڕینەوەی تاگەکانی ڕەنگ لە SRT چونکە SRT پشتگیری ڕەنگ ناکات وەک ASS
         clean_txt = re.sub(r'\{\\[^}]*\}', '', c['text'])
         lines.append(f"{idx}\n{s} --> {e}\n{clean_punctuation(clean_txt)}\n")
     return "\n".join(lines)
@@ -478,11 +486,11 @@ def main():
         with c1:
             anime_name = st.text_input("🎬 ناوی فیلم / زنجیرە (بۆ گۆشەی سەرەوە)")
             translator_name = st.text_input("✍️ ناوی وەرگێڕ")
-            translator_color = st.color_picker("🎨 ڕەنگی ناوی وەرگێڕ", "#00FF00") # ڕەنگی سەوز بە بنەڕەتی
+            translator_color = st.color_picker("🎨 ڕەنگی ناوی وەرگێڕ", "#00FF00")
         with c2:
             season_ep = st.text_input("📺 سیزن / ئەڵقە")
             tech_name = st.text_input("💻 ناوی تەکنیک")
-            tech_color = st.color_picker("🎨 ڕەنگی ناوی تەکنیک", "#00FFFF") # ڕەنگی شین باو بە بنەڕەتی
+            tech_color = st.color_picker("🎨 ڕەنگی ناوی تەکنیک", "#00FFFF")
             
         intro_duration = st.number_input("⏱️ کاتی مانەوەی ناوەکانی دەستپێک (بە چرکە)", min_value=1.0, max_value=15.0, value=3.0, step=0.5)
 
@@ -542,23 +550,23 @@ def main():
                 current_intro_time = 0.0
                 if translator_name: 
                     end_time = current_intro_time + intro_duration
-                    c_tag = f"{{\\c{hex_to_ass(translator_color)}}}"
+                    color_code = hex_to_ass(translator_color)
                     intro.append({
                         "start": float_to_ass_time(current_intro_time), 
                         "end": float_to_ass_time(end_time), 
                         "alignment_tag": "{\\an2}", 
-                        "text": f"{c_tag}وەرگێڕان\\N{translator_name}"
+                        "text": f"{{\\c{color_code}}}وەرگێڕان\\N{translator_name}"
                     })
                     current_intro_time = end_time
                     
                 if tech_name: 
                     end_time = current_intro_time + intro_duration
-                    c_tag = f"{{\\c{hex_to_ass(tech_color)}}}"
+                    color_code = hex_to_ass(tech_color)
                     intro.append({
                         "start": float_to_ass_time(current_intro_time), 
                         "end": float_to_ass_time(end_time), 
                         "alignment_tag": "{\\an2}", 
-                        "text": f"{c_tag}تەکنیک\\N{tech_name}"
+                        "text": f"{{\\c{color_code}}}تەکنیک\\N{tech_name}"
                     })
                     current_intro_time = end_time
 
