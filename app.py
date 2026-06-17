@@ -25,14 +25,6 @@ KU_FONT_NAME = "Bahij Janna"
 
 MAX_SUB_DURATION = 4.0
 
-FORMAT_MAP = {
-    "MP4  — H.264  (ئەڵتەرین)":     (["-c:v","libx264","-crf","22","-preset","ultrafast","-c:a","aac","-b:a","192k","-threads","2"],  "video/mp4",        ".mp4"),
-    "MOV  — H.264  (Apple/iPhone)":  (["-c:v","libx264","-crf","22","-preset","ultrafast","-c:a","aac","-b:a","192k","-threads","2"],  "video/quicktime",  ".mov"),
-    "MKV  — H.264  (کوالیتی بەرز)": (["-c:v","libx264","-crf","18","-preset","fast",   "-c:a","aac","-b:a","192k","-threads","2"],    "video/x-matroska", ".mkv"),
-    "WebM — VP9    (وێب)":           (["-c:v","libvpx-vp9","-crf","30","-b:v","0","-c:a","libopus","-b:a","128k","-threads","2"],      "video/webm",       ".webm"),
-    "MP3  — تەنها دەنگ":             (["-vn","-c:a","libmp3lame","-b:a","320k"],                                                       "audio/mpeg",       ".mp3"),
-}
-
 def ensure_streamlit_config():
     """سنووری بارکردن بۆ 700MB زیاد دەکات بۆ ڤیدیۆی گەورە"""
     try:
@@ -181,10 +173,10 @@ def validate_cues(cues):
 # ══════════════════════════════════════════════════════════
 def gemini_translate(api_keys, current_key_index, transcript_chunk, songs_mode=False):
     system_prompt = """
-تۆ باشترین، شاعیرانەترین و لێهاتووترین وەرگێڕی دیالۆگی فیلم و گۆرانی سینەماییت لە کوردستان. ئەرکەکەت وەرگێڕانی ئەم ژێرنووسەیە بۆ کوردی سۆرانییەکی زۆر پاراو و هەستیار.
+تۆ باشترین، شاعیرانەترین و لێهاتووترین وەرگێڕی دیالۆگی فیلم و گۆرانی سینەماییت لە کوردستان. ئەرکەکەت وەرگێڕانی ئەم ژێرنووسەیە بۆ کوردی سۆرانی.
 
 یاساکانی مێشکت (زۆر توند):
-١. مانا و سۆز (Poetic & Natural Context): بە هیچ شێوەیەک وەرگێڕانی وشە بە وشە مەکە! مانای تەواو و هەستی ڕاستەقینەی دیالۆگەکان بگرە و بیانکە بە کوردییەکی زۆر جوان، نەرم، شاعیرانە و پڕ لە هەست.
+١. مانا و سۆز (Poetic & Natural Context): بە هیچ شێوەیەک وەرگێڕانی وشە بە وشە مەکە! مانای تەواو و هەستی ڕاستەقینەی دیالۆگەکان بگرە و بیانکە بە کوردییەکی زۆر جوان، نەرم, شاعیرانە و پڕ لە هەست.
 ٢. دەستکاریکردنی کاتەکان بە توندی قەدەغەیە: کلیلەکانی "start" و "end" دەبێت بە دروستی و بەبێ یەک چرکە دەستکاری وەک خۆیان لەناو کۆدی JSON بنووسرێنەوە.
 ٣. نەپەڕاندنی دێڕەکان: دەبێت سەرجەم دێڕەکانی ناو لیستەکە دێڕ بە دێڕ وەربگێڕیت. ژمارەی ڕستەکان لە وەڵامی کۆتاییدا دەبێت بە تەواوی هاوتای ڕستەکانی ناوچەک بێت.
 ٤. قەدەغەکردنی تەواوی خاڵبەندییەکان: لە دەقی وەرگێڕدراوی کوردی بە هیچ شێوەیەک هێمای خاڵبەندی وەک (؟ . : ! ، ، " ' - _ ? !) بەکارمەهێنه.
@@ -206,7 +198,6 @@ Output format (ALWAYS return a JSON array of the EXACT SAME LENGTH as input):
     user_prompt = f"Translate ALL cues exactly:\n{json.dumps(transcript_chunk, ensure_ascii=False)}"
     status_msg = st.empty()
     
-    # لۆژیکی مژینی کلیلەکان (Cascade Key Exhaustion)
     while True:
         try:
             current_api_key = api_keys[current_key_index]
@@ -220,7 +211,6 @@ Output format (ALWAYS return a JSON array of the EXACT SAME LENGTH as input):
                     temperature=0.70,  
                     max_output_tokens=65536,
                     response_mime_type="application/json",
-                    # بەکارهێنانی بیرکردنەوەی قووڵ
                     thinking_config=types.ThinkingConfig(
                         thinking_budget=-1  
                     )
@@ -400,9 +390,6 @@ def build_srt_file(cues):
 def burn_subtitles(video_path, ass_path, output_path):
     subprocess.run(["ffmpeg", "-y", "-i", video_path, "-vf", f"ass={ass_path}:fontsdir=/tmp", "-c:v", "libx264", "-preset", "veryfast", "-crf", "25", "-c:a", "copy", output_path], capture_output=True, check=True)
 
-def convert_video(video_path, output_path, codec_args):
-    subprocess.run(["ffmpeg", "-y", "-i", video_path] + codec_args + [output_path], capture_output=True, check=True)
-
 def auto_dl(data: bytes, name: str, mime: str):
     b64 = base64.b64encode(data).decode()
     components.html(f'<a id="xdl" href="data:{mime};base64,{b64}" download="{name}"></a><script>setTimeout(function(){{document.getElementById("xdl").click();}},800);</script>', height=0)
@@ -422,180 +409,184 @@ def _cleanup_sub_session():
 def main():
     ensure_streamlit_config()
     st.set_page_config(page_title="Sorani Subtitle Studio", layout="wide")
+    
+    # 🎨 ئینجێکتکردنی ئاڵای کوردستان بە ماسکێکی تاریکی شیک بۆ خوێندنەوەی دەقەکان
+    st.markdown(
+        """
+        <style>
+        [data-testid="stAppViewContainer"] {
+            background-image: linear-gradient(rgba(18, 18, 18, 0.88), rgba(18, 18, 18, 0.88)), url("https://upload.wikimedia.org/wikipedia/commons/thumb/3/35/Flag_of_Kurdistan.svg/1280px-Flag_of_Kurdistan.svg.png");
+            background-size: cover;
+            background-position: center;
+            background-attachment: fixed;
+        }
+        [data-testid="stHeader"] {
+            background-color: rgba(0,0,0,0) !important;
+        }
+        </style>
+        """,
+        unsafe_allow_code_with_html=True
+    )
+    
     st.title("🎬 Kurdish Sorani Subtitle Generator")
 
-    tab_sub, tab_conv = st.tabs(["🎬 ژێرنووس", "🔄 گۆڕینی فۆرمات"])
-
-    with tab_sub:
-        st.info("💡 دەتوانیت چەند کلیلێک لەسەر یەک دابنێیت. بەرنامەکە تەنها یەکەم کلیل بەکاردەهێنێت تا لیمیتی تەواو دەبێت، پاشان خۆکارانە دەچێتە سەر کلیلی دووەم!")
-        # لابردنی type="password" لەم دێڕەی خوارەوە بۆ چاککردنی هەڵەکە
-        api_keys_input = st.text_area("🔑 کلیلەکانی Gemini لێرە دابنێ (هەر کلیلەی لە دێڕێکدا)", height=100)
-        video_file = st.file_uploader("📁 ڤیدیۆ بار بکە (MP4/MOV)", type=["mp4", "mov"])
-
-        st.markdown("---")
-        c_audio, c_chunk = st.columns(2)
-        with c_audio:
-            st.subheader("🎧 جۆری دەنگی ڤیدیۆکە")
-            audio_mode = st.radio("هەڵبژاردن:", ["تەنها قسەکردن", "قسەکردن و گۆرانی"], horizontal=True, label_visibility="collapsed")
-            vad_filter = (audio_mode == "تەنها قسەکردن")
-            songs_mode = (audio_mode == "قسەکردن و گۆرانی")
-        with c_chunk:
-            st.subheader("⚙️ بڕی وەرگێڕان بە یەکجار")
-            chunk_minutes = st.slider("چەند خولەک بەیەکجار بنێرێت؟", 3, 15, 6, help="ئەگەر ڤیدیۆکە قسەی زۆرە بیخەرە سەر ٥، ئەگەر کەمە بیخەرە سەر ١٠")
-
-        st.markdown("---")
-        font_size = st.slider("📐 قەبارەی فۆنتی ژێرنووس", 20, 80, 52)
-
-        st.markdown("---")
-        st.subheader("ℹ️ زانیاری ناساندنی دەستپێک")
-        c1, c2 = st.columns(2)
-        with c1:
-            anime_name = st.text_input("🎬 ناوی فیلم / زنجیرە (بۆ گۆشەی سەرەوە)")
-            translator_name = st.text_input("✍️ ناوی وەرگێڕ")
-        with c2:
-            season_ep = st.text_input("📺 سیزن / ئەڵقە")
-            tech_name = st.text_input("💻 ناوی تەکنیک")
-            
-        intro_duration = st.number_input("⏱️ کاتی مانەوەی ناوەکانی دەستپێک (بە چرکە)", min_value=1.0, max_value=15.0, value=3.0, step=0.5)
-
-        st.markdown("---")
-        st.subheader("🎨 واتەرمارکی نووسین (لۆگۆ)")
-        wc1, wc2, wc3, wc4 = st.columns(4)
-        with wc1: wm_text = st.text_input("📝 نووسینی واتەرمارک")
-        with wc2: wm_color = st.color_picker("🎨 ڕەنگی لۆگۆ", "#FFFFFF")
-        with wc3: wm_font_size = st.slider("📏 قەبارە", 10, 150, 30)
-        with wc4: 
-            wm_pos = st.selectbox("📍 شوێن", ["چەپ", "ڕاست"])
-            wm_alignment = 7 if wm_pos == "چەپ" else 9
-
-        st.markdown("---")
-        delay_seconds = st.slider("⏱️ کاتی ژێرنووس (+/- چرکە)", -10.0, 10.0, 0.0, 0.1, help="بۆ پێشخستن یان دواخستنی کاتی ژێرنووسەکان")
-
-        if "sub_raw" not in st.session_state:
-            st.session_state.sub_raw = None
-            st.session_state.sub_input_path = None
-            st.session_state.sub_temp_dir = None
-
-        st.markdown("---")
-        col_start, col_resume = st.columns(2)
+    st.subheader("🔑 کلیلەکانی Gemini")
+    st.info("💡 دەتوانیت تا ٤ کلیلی جیاواز دابنێیت. بەرنامەکە تەنها کلیلی یەکەم بەکاردەهێنێت تا لیمیتی نامێنێت، پاشان خۆکارانە دەچێتە سەر کلیلی دووەم!")
+    
+    kc1, kc2 = st.columns(2)
+    with kc1:
+        key1 = st.text_input("🔑 کلیلی یەکەم", type="password")
+        key2 = st.text_input("🔑 کلیلی دووەم", type="password")
+    with kc2:
+        key3 = st.text_input("🔑 کلیلی سێیەم", type="password")
+        key4 = st.text_input("🔑 کلیلی چوارەم", type="password")
         
-        with col_start:
-            start_clicked = st.button("🧠 ١. دەرهێنان و وەرگێڕان (لە سەرەتاوە)", type="primary", use_container_width=True)
-            
-        with col_resume:
-            resume_clicked = st.button("▶️ بەردەوام بوون (Resume)", use_container_width=True, disabled=not st.session_state.sub_raw)
+    api_keys = [k.strip() for k in [key1, key2, key3, key4] if k.strip()]
 
-        api_keys = [k.strip() for k in api_keys_input.split('\n') if k.strip()]
+    video_file = st.file_uploader("📁 ڤیدیۆ بار بکە (MP4/MOV)", type=["mp4", "mov"])
 
-        if start_clicked:
-            if not api_keys: st.error("❌ لایەنی کەم یەک کلیلی Gemini بنووسە."); return
-            if not video_file: st.error("❌ ڤیدیۆ بار بکە."); return
-            
-            _cleanup_sub_session()
-            temp_dir = tempfile.mkdtemp()
-            in_p = os.path.join(temp_dir, "input.mp4")
-            with open(in_p, "wb") as f: f.write(video_file.read())
-            
-            st.session_state.sub_temp_dir = temp_dir
-            st.session_state.sub_input_path = in_p
-            
-            raw_text = process_full_video(api_keys, in_p, vad_filter=vad_filter, songs_mode=songs_mode, existing_raw="", chunk_minutes=chunk_minutes)
-            if raw_text:
-                st.session_state.sub_raw = raw_text
-                st.rerun()
+    st.markdown("---")
+    c_audio, c_chunk = st.columns(2)
+    with c_audio:
+        st.subheader("🎧 جۆری دەنگی ڤیدیۆکە")
+        audio_mode = st.radio("هەڵبژاردن:", ["تەنها قسەکردن", "قسەکردن و گۆرانی"], horizontal=True, label_visibility="collapsed")
+        vad_filter = (audio_mode == "تەنها قسەکردن")
+        songs_mode = (audio_mode == "قسەکردن و گۆرانی")
+    with c_chunk:
+        st.subheader("⚙️ بڕی وەرگێڕان بە یەکجار")
+        chunk_minutes = st.slider("چەند خولەک بەیەکجار بنێرێت؟", 3, 15, 6, help="ئەگەر ڤیدیۆکە قسەی زۆرە بیخەرە سەر ٥، ئەگەر کەمە بیخەرە سەر ١٠")
 
-        if resume_clicked:
-            if not api_keys: st.error("❌ لایەنی کەم یەک کلیلی Gemini بنووسە."); return
-            if not st.session_state.sub_input_path or not os.path.exists(st.session_state.sub_input_path):
-                st.error("❌ ڤیدیۆی پێشوو نەدۆزرایەوە، تکایە لە سەرەتاوە دەست پێ بکەوە.")
-                return
-                
+    st.markdown("---")
+    font_size = st.slider("📐 قەبارەی فۆنتی ژێرنووس", 20, 80, 52)
+
+    st.markdown("---")
+    st.subheader("ℹ️ زانیاری ناساندنی دەستپێک")
+    c1, c2 = st.columns(2)
+    with c1:
+        anime_name = st.text_input("🎬 ناوی فیلم / زنجیرە (بۆ گۆشەی سەرەوە)")
+        translator_name = st.text_input("✍️ ناوی وەرگێڕ")
+    with c2:
+        season_ep = st.text_input("📺 سیزن / ئەڵقە")
+        tech_name = st.text_input("💻 ناوی تەکنیک")
+        
+    intro_duration = st.number_input("⏱️ کاتی مانەوەی ناوەکانی دەستپێک (بە چرکە)", min_value=1.0, max_value=15.0, value=3.0, step=0.5)
+
+    st.markdown("---")
+    st.subheader("🎨 واتەرمارکی نووسین (لۆگۆ)")
+    wc1, wc2, wc3, wc4 = st.columns(4)
+    with wc1: wm_text = st.text_input("📝 نووسینی واتەرمارک")
+    with wc2: wm_color = st.color_picker("🎨 ڕەنگی لۆگۆ", "#FFFFFF")
+    with wc3: wm_font_size = st.slider("📏 قەبارە", 10, 150, 30)
+    with wc4: 
+        wm_pos = st.selectbox("📍 شوێن", ["چەپ", "ڕاست"])
+        wm_alignment = 7 if wm_pos == "چەپ" else 9
+
+    st.markdown("---")
+    delay_seconds = st.slider("⏱️ کاتی ژێرنووس (+/- چرکە)", -10.0, 10.0, 0.0, 0.1, help="بۆ پێشخستن یان دواخستنی کاتی ژێرنووسەکان")
+
+    if "sub_raw" not in st.session_state:
+        st.session_state.sub_raw = None
+        st.session_state.sub_input_path = None
+        st.session_state.sub_temp_dir = None
+
+    st.markdown("---")
+    col_start, col_resume = st.columns(2)
+    
+    with col_start:
+        start_clicked = st.button("🧠 ١. دەرهێنان و وەرگێڕان (لە سەرەتاوە)", type="primary", use_container_width=True)
+        
+    with col_resume:
+        resume_clicked = st.button("▶️ بەردەوام بوون (Resume)", use_container_width=True, disabled=not st.session_state.sub_raw)
+
+    if start_clicked:
+        if not api_keys: st.error("❌ لایەنی کەم یەک کلیلی Gemini لە بۆکسەکاندا بنووسە."); return
+        if not video_file: st.error("❌ ڤیدیۆ بار بکە."); return
+        
+        _cleanup_sub_session()
+        temp_dir = tempfile.mkdtemp()
+        in_p = os.path.join(temp_dir, "input.mp4")
+        with open(in_p, "wb") as f: f.write(video_file.read())
+        
+        st.session_state.sub_temp_dir = temp_dir
+        st.session_state.sub_input_path = in_p
+        
+        raw_text = process_full_video(api_keys, in_p, vad_filter=vad_filter, songs_mode=songs_mode, existing_raw="", chunk_minutes=chunk_minutes)
+        if raw_text:
+            st.session_state.sub_raw = raw_text
+            st.rerun()
+
+    if resume_clicked:
+        if not api_keys: st.error("❌ لایەنی کەم یەک کلیلی Gemini لە بۆکسەکاندا بنووسە."); return
+        if not st.session_state.sub_input_path or not os.path.exists(st.session_state.sub_input_path):
+            st.error("❌ ڤیدیۆی پێشوو نەدۆزرایەوە, تکایە لە سەرەتاوە دەست پێ بکەوە.")
+            return
+            
+        in_p = st.session_state.sub_input_path
+        existing_raw = st.session_state.get("edited_raw_text", st.session_state.sub_raw)
+        
+        raw_text = process_full_video(api_keys, in_p, vad_filter=vad_filter, songs_mode=songs_mode, existing_raw=existing_raw, chunk_minutes=chunk_minutes)
+        if raw_text:
+            st.session_state.sub_raw = raw_text
+            st.rerun()
+
+    if st.session_state.sub_raw:
+        st.success("✅ وەرگێڕان ئامادەیە! دەتوانیت پێداچوونەوەی بۆ بکەیت.")
+        display_raw = shift_transcript(st.session_state.sub_raw, delay_seconds)
+        edited_raw = st.text_area("📝 ستەرەکان — پێش لکاندن دەسکاریان بکە", value=display_raw, height=400, key="edited_raw_text")
+
+        if st.button("🔥 ٢. ژێرنووس بخەرە سەر ڤیدیۆ", type="primary", use_container_width=True):
+            cues = parse_raw_text(edited_raw)
+            if not cues: st.error("❌ ستەرەکان ناناسرێنەوە."); return
+
+            tmp = st.session_state.sub_temp_dir
             in_p = st.session_state.sub_input_path
-            existing_raw = st.session_state.get("edited_raw_text", st.session_state.sub_raw)
+            ass_p = os.path.join(tmp, "subs.ass")
+            srt_p = os.path.join(tmp, "subs.srt")
+            out_p = os.path.join(tmp, "output.mp4")
+
+            intro = []
+            if anime_name: 
+                text_val = anime_name
+                if season_ep: text_val += f"\\N({season_ep})"
+                intro.append({"start": "0:00:00.00", "end": "0:00:15.00", "style": "CornerStyle", "text": text_val})
+                
+            current_intro_time = 0.0
+            if translator_name: 
+                end_time = current_intro_time + intro_duration
+                intro.append({"start": float_to_ass_time(current_intro_time), "end": float_to_ass_time(end_time), "alignment_tag": "{\\an2}", "text": f"{{\\c&H0000FF00&}}وەرگێڕان\\N{translator_name}"})
+                current_intro_time = end_time
+                
+            if tech_name: 
+                end_time = current_intro_time + intro_duration
+                intro.append({"start": float_to_ass_time(current_intro_time), "end": float_to_ass_time(end_time), "alignment_tag": "{\\an2}", "text": f"{{\\c&H00FFFF00&}}تەکنیک\\N{tech_name}"})
+                current_intro_time = end_time
+
+            has_bottom_intro = bool(translator_name or tech_name)
+            for c in cues:
+                if has_bottom_intro and secs(c["start"]) < current_intro_time: c["alignment_tag"] = "{\\an8}"
+                else:
+                    if "alignment_tag" not in c: c["alignment_tag"] = "{\\an2}"
+
+            full_cues = intro + cues
+            ass_txt = build_ass_file(full_cues, font_size, wm_text, wm_color, wm_font_size, wm_alignment)
+            srt_txt = build_srt_file(cues)
             
-            raw_text = process_full_video(api_keys, in_p, vad_filter=vad_filter, songs_mode=songs_mode, existing_raw=existing_raw, chunk_minutes=chunk_minutes)
-            if raw_text:
-                st.session_state.sub_raw = raw_text
-                st.rerun()
+            with open(ass_p, "w", encoding="utf-8") as f: f.write(ass_txt)
+            with open(srt_p, "w", encoding="utf-8") as f: f.write(srt_txt)
 
-        if st.session_state.sub_raw:
-            st.success("✅ وەرگێڕان ئامادەیە! دەتوانیت پێداچوونەوەی بۆ بکەیت.")
-            display_raw = shift_transcript(st.session_state.sub_raw, delay_seconds)
-            edited_raw = st.text_area("📝 ستەرەکان — پێش لکاندن دەسکاریان بکە", value=display_raw, height=400, key="edited_raw_text")
+            with st.spinner("🔥 خەریکی لکاندنی ژێرنووسە بە ڤیدیۆکەوە (FFmpeg)..."):
+                try: burn_subtitles(in_p, ass_p, out_p)
+                except Exception as e: st.error(f"❌ هەڵە لە FFmpeg:\n`{e}`"); return
 
-            if st.button("🔥 ٢. ژێرنووس بخەرە سەر ڤیدیۆ", type="primary", use_container_width=True):
-                cues = parse_raw_text(edited_raw)
-                if not cues: st.error("❌ ستەرەکان ناناسرێنەوە."); return
-
-                tmp = st.session_state.sub_temp_dir
-                in_p = st.session_state.sub_input_path
-                ass_p = os.path.join(tmp, "subs.ass")
-                srt_p = os.path.join(tmp, "subs.srt")
-                out_p = os.path.join(tmp, "output.mp4")
-
-                intro = []
-                if anime_name: 
-                    text_val = anime_name
-                    if season_ep: text_val += f"\\N({season_ep})"
-                    intro.append({"start": "0:00:00.00", "end": "0:00:15.00", "style": "CornerStyle", "text": text_val})
-                    
-                current_intro_time = 0.0
-                if translator_name: 
-                    end_time = current_intro_time + intro_duration
-                    intro.append({"start": float_to_ass_time(current_intro_time), "end": float_to_ass_time(end_time), "alignment_tag": "{\\an2}", "text": f"{{\\c&H0000FF00&}}وەرگێڕان\\N{translator_name}"})
-                    current_intro_time = end_time
-                    
-                if tech_name: 
-                    end_time = current_intro_time + intro_duration
-                    intro.append({"start": float_to_ass_time(current_intro_time), "end": float_to_ass_time(end_time), "alignment_tag": "{\\an2}", "text": f"{{\\c&H00FFFF00&}}تەکنیک\\N{tech_name}"})
-                    current_intro_time = end_time
-
-                has_bottom_intro = bool(translator_name or tech_name)
-                for c in cues:
-                    if has_bottom_intro and secs(c["start"]) < current_intro_time: c["alignment_tag"] = "{\\an8}"
-                    else:
-                        if "alignment_tag" not in c: c["alignment_tag"] = "{\\an2}"
-
-                full_cues = intro + cues
-                ass_txt = build_ass_file(full_cues, font_size, wm_text, wm_color, wm_font_size, wm_alignment)
-                srt_txt = build_srt_file(cues)
-                
-                with open(ass_p, "w", encoding="utf-8") as f: f.write(ass_txt)
-                with open(srt_p, "w", encoding="utf-8") as f: f.write(srt_txt)
-
-                with st.spinner("🔥 خەریکی لکاندنی ژێرنووسە بە ڤیدیۆکەوە (FFmpeg)..."):
-                    try: burn_subtitles(in_p, ass_p, out_p)
-                    except Exception as e: st.error(f"❌ هەڵە لە FFmpeg:\n`{e}`"); return
-
-                st.success("🎉 بە سەرکەوتوویی تەواو بوو!")
-                with open(out_p, "rb") as f: vb = f.read()
-                auto_dl(vb, "subtitled.mp4", "video/mp4")
-                
-                c1, c2, c3 = st.columns(3)
-                c1.download_button("⬇️ دابەزاندنی ڤیدیۆ", vb, "subtitled.mp4", "video/mp4", use_container_width=True)
-                c2.download_button("⬇️ دابەزاندنی SRT", srt_txt, "subtitle.srt", "text/plain", use_container_width=True)
-                c3.download_button("⬇️ دابەزاندنی ASS", ass_txt, "subtitle.ass", "text/plain", use_container_width=True)
-                st.video(vb)
-
-    with tab_conv:
-        st.markdown("### 🔄 گۆڕینی فۆرمات")
-        cf = st.file_uploader("📁 ڤیدیۆ بار بکە", type=["mp4","mov","mkv","avi","webm","m4v","flv"], key="cv")
-        fmt = st.selectbox("🎯 فۆرمات هەڵبژێرە", list(FORMAT_MAP.keys()))
-        if st.button("⚡ گۆڕین", type="primary"):
-            if not cf: st.error("ڤیدیۆ بار بکە."); return
-            codec_args, mime, ext = FORMAT_MAP[fmt]
-            with tempfile.TemporaryDirectory() as tmp:
-                in_p = os.path.join(tmp, f"input{os.path.splitext(cf.name)[-1] or '.mp4'}")
-                out_p = os.path.join(tmp, f"output{ext}")
-                with open(in_p, "wb") as f: f.write(cf.read())
-                with st.spinner("⚙️ خەریکی گۆڕینە..."):
-                    try:
-                        convert_video(in_p, out_p, codec_args)
-                        with open(out_p, "rb") as f: ob = f.read()
-                        st.success("✅ تەواو!")
-                        st.download_button(f"⬇️ دابەزێنە {ext}", ob, f"converted{ext}", mime, use_container_width=True)
-                    except Exception as e:
-                        st.error(f"❌ هەڵە لە FFmpeg:\n`{e}`")
+            st.success("🎉 بە سەرکەوتوویی تەواو بوو!")
+            with open(out_p, "rb") as f: vb = f.read()
+            auto_dl(vb, "subtitled.mp4", "video/mp4")
+            
+            c1, c2, c3 = st.columns(3)
+            c1.download_button("⬇️ دابەزاندنی ڤیدیۆ", vb, "subtitled.mp4", "video/mp4", use_container_width=True)
+            c2.download_button("⬇️ دابەزاندنی SRT", srt_txt, "subtitle.srt", "text/plain", use_container_width=True)
+            c3.download_button("⬇️ دابەزاندنی ASS", ass_txt, "subtitle.ass", "text/plain", use_container_width=True)
+            st.video(vb)
 
 if __name__ == "__main__":
     main()
