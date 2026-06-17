@@ -37,7 +37,6 @@ FORMAT_MAP = {
 }
 
 def find_kurdish_font():
-    # گەڕان لە زۆرترین شوێن بۆ دڵنیابوونەوە لە دۆزینەوەی فۆنتەکە لەسەر هەموو جۆرە سێرڤەرێک
     possible_paths = [
         os.path.join(APP_DIR, KU_FONT_FILE),
         os.path.join(ROOT_DIR, KU_FONT_FILE),
@@ -226,31 +225,34 @@ def validate_cues(cues):
 # ══════════════════════════════════════════════════════════
 #  GEMINI TRANSLATION (100% Human-like & Strict)
 # ══════════════════════════════════════════════════════════
-def gemini_translate(client, transcript_chunk, pass_number=1):
-    system_prompt = """
+def gemini_translate(client, transcript_chunk, pass_number, is_mixed_audio):
+    
+    song_instruction = ""
+    if is_mixed_audio:
+        song_instruction = "٨. جیاکردنەوەی گۆرانی: ئەگەر هەستت کرد دێڕەکە هۆنراوەی گۆرانییە یان مۆسیقایە، دەبێت لە سەرەتای دەقە کوردییەکە نیشانەی 🎵 دابنێیت. ئەگەر قسەی ئاسایی بوو هیچ نیشانەیەک دامەنێ."
+    else:
+        song_instruction = "٨. لابردنی تەواوی خاڵبەندی و هێماکان: بە هیچ شێوەیەک هێماکانی خاڵبەندی بەکارمەهێنە."
+
+    system_prompt = f"""
 تۆ باشترین و بەتواناترین وەرگێڕ و دەرهێنەری دۆبلاژی سینەماییت لە کوردستان. ئەرکەکەت: دانانی ژێرنووسی سینەماییانەی زۆر شاز و ناوازە بۆ ئەم ڤیدیۆیە بە کوردی سۆرانی.
 
 یاساکانی مێشکی تۆ (زۆر گرنگ و توند):
-١. وەرگێڕانی ١٠٠٪ مرۆڤانە و شاز: بە هیچ شێوەیەک وەرگێڕانی وشە بە وشە (حەرفی) یان وەرگێڕانی ئامێری مەکە! مانای قسەکان، هەست و سۆزی کارەکتەرەکان بگرە و بیانکە بە کوردییەکی زۆر پاراو، جوان، و مانا دار. دەبێت بینەر بە هیچ شێوەیەک هەست نەکات کە زیرەکی دەستکرد ئەمەی وەرگێڕاوە.
+١. وەرگێڕانی ١٠٠٪ مرۆڤانە و شاز: بە هیچ شێوەیەک وەرگێڕانی وشە بە وشە (حەرفی) یان وەرگێڕانی ئامێری مەکە! مانای قسەکان، هەست و سۆزی کارەکتەرەکان بگرە و بیانکە بە کوردییەکی زۆر پاراو، جوان، و مانا دار.
 ٢. بەکارهێنانی ئیدیۆم و پەند: ئەگەر لە زمانە بیانییەکەدا ئیدیۆمێک یان قسەیەکی خوازراو هەبوو، ڕێک بەرامبەرە جوانەکەی لە زمانی کوردیدا بەکاربهێنە.
 ٣. جیاکردنەوەی کارەکتەرەکان: ئەگەر هەستت کرد دوو کەس قسە دەکەن، بە جوانی دیالۆگەکانیان جیا بکەرەوە.
 ٤. پاراستنی ڕێزمانی و جێناوەکان: ئەگەر کارەکتەرەکە گوتی "تۆ"، دەبێت بە "تۆ" وەربگێڕدرێت، هەرگیز مەکە بە "من".
 ٥. زۆر گرنگ: تۆ لیستێک لە ژێرنووست پێدەدرێت. دەبێت **هەموو دانە بە دانەی لیستەکە** وەربگێڕیت. بە هیچ شێوەیەک نابێت یەک دێڕیش بپەڕێنیت یان کورت بکەیتەوە.
 ٦. کاتەکان (start و end) بە تەواوی وەک خۆیان بهێڵەوە و دەستکارییان مەکە.
-٧. لابردنی تەواوی خاڵبەندی و هێماکان: بە هیچ شێوەیەک هێماکانی خاڵبەندی وەک (؟ . : ! ، ، " ' - _ ? !) بەکارمەهێنە.
+٧. ناوی کارەکتەرەکان قەدەغەیە بنووسرێت.
+{song_instruction}
 
 Output format (ALWAYS return a JSON array of the EXACT SAME LENGTH as input):
 [
-  {
+  {{
     "start": 0.00,
     "end": 1.50,
     "text": "First translated line..."
-  },
-  {
-    "start": 1.50,
-    "end": 3.00,
-    "text": "Second translated line..."
-  }
+  }}
 ]
 """
     user_prompt = f"Translate ALL of these cues without skipping any:\n{json.dumps(transcript_chunk, ensure_ascii=False)}"
@@ -288,14 +290,16 @@ def load_whisper():
 def extract_audio(video_path, audio_path):
     subprocess.run(["ffmpeg", "-y", "-i", video_path, "-vn", "-ac", "1", "-ar", "16000", audio_path], capture_output=True, check=True)
 
-def transcribe_audio(audio_path):
+def transcribe_audio(audio_path, is_mixed_audio):
     model = load_whisper()
+    
+    # ئەگەر تێکەڵ بێت (گۆرانی تێدابێت)، فلتەری بێدەنگی لادەبەین بۆ ئەوەی گۆرانییەکەش بخوێنێتەوە
     segments, info = model.transcribe(
         audio_path,
         beam_size=5,
         word_timestamps=True,
-        vad_filter=True,
-        vad_parameters=dict(min_silence_duration_ms=300)
+        vad_filter=not is_mixed_audio, 
+        vad_parameters=dict(min_silence_duration_ms=300) if not is_mixed_audio else None
     )
     
     cues = []
@@ -380,14 +384,14 @@ def throttle_countdown():
 # ══════════════════════════════════════════════════════════
 #  ⚙️ بەڕێوەبەری سەرەکی پڕۆژەکە (ORCHESTRATOR)
 # ══════════════════════════════════════════════════════════
-def process_full_video(api_key, video_path):
+def process_full_video(api_key, video_path, is_mixed_audio):
     audio_path = video_path.replace(".mp4", ".wav")
     
     with st.spinner("🎵 خەریکی دەرهێنانی دەنگی ڤیدیۆکەیە..."):
         extract_audio(video_path, audio_path)
         
     with st.spinner("📝 خەریکی نووسینەوەی دەنگەکەیە بە وردی (Faster-Whisper)..."):
-        cues = transcribe_audio(audio_path)
+        cues = transcribe_audio(audio_path, is_mixed_audio)
         if not cues:
             st.error("❌ هیچ دیالۆگێک لە ڤیدیۆکەدا نەدۆزرایەوە.")
             return ""
@@ -401,7 +405,7 @@ def process_full_video(api_key, video_path):
         local_client = genai.Client(api_key=api_key)
         
         for index, chunk in enumerate(chunks):
-            translated = gemini_translate(local_client, chunk, pass_number=index + 1)
+            translated = gemini_translate(local_client, chunk, index + 1, is_mixed_audio)
             all_cues.extend(translated)
             progress.progress((index + 1) / total)
             if index < total - 1:
@@ -441,8 +445,17 @@ def build_ass_file(cues, font_size, wm_text, wm_color, wm_font_size, wm_alignmen
         ass.append(f"Dialogue: 0,0:00:00.00,9:59:59.99,WatermarkStyle,,0,0,0,,{{\\an{wm_alignment}}}{wm_text}")
         
     for c in cues:
-        txt = clean_punctuation(c['text'])
-        ass.append(f"Dialogue: 0,{c['start']},{c['end']},{c.get('style','Default')},,0,0,0,,{c.get('alignment_tag','{\\an2}')}{txt}")
+        raw_txt = c['text']
+        is_song = "🎵" in raw_txt
+        
+        # سڕینەوەی نیشانەی 🎵 و خاڵبەندییەکان بۆ ناو ڤیدیۆکە
+        txt = clean_punctuation(raw_txt.replace("🎵", ""))
+        
+        # ئەگەر گۆرانی بوو، کۆدی ڕەنگی زەردی بۆ زیاد دەکەین
+        color_tag = "{\\c&H0000FFFF&}" if is_song else ""
+        align_tag = c.get('alignment_tag','{\\an2}')
+        
+        ass.append(f"Dialogue: 0,{c['start']},{c['end']},{c.get('style','Default')},,0,0,0,,{align_tag}{color_tag}{txt}")
     return "\n".join(ass)
 
 def build_srt_file(cues):
@@ -450,8 +463,16 @@ def build_srt_file(cues):
     for idx, c in enumerate(cues, start=1):
         s = sec_to_srt(secs(c["start"]))
         e = sec_to_srt(secs(c["end"]))
-        clean_txt = re.sub(r'\{\\[^}]*\}', '', c['text'])
-        lines.append(f"{idx}\n{s} --> {e}\n{clean_punctuation(clean_txt)}\n")
+        
+        raw_txt = c['text']
+        is_song = "🎵" in raw_txt
+        
+        clean_txt = clean_punctuation(re.sub(r'\{\\[^}]*\}', '', raw_txt.replace("🎵", "")))
+        
+        if is_song:
+            clean_txt = f'<font color="#FFFF00">{clean_txt}</font>'
+            
+        lines.append(f"{idx}\n{s} --> {e}\n{clean_txt}\n")
     return "\n".join(lines)
 
 def burn_subtitles(video_path, ass_path, output_path):
@@ -476,6 +497,10 @@ def main():
     with tab_sub:
         api_key = st.text_input("🔑 Gemini API Key", type="password")
         video_file = st.file_uploader("📁 ڤیدیۆ بار بکە (MP4/MOV)", type=["mp4", "mov"])
+        
+        st.markdown("---")
+        audio_mode = st.radio("🎵 جۆری دەنگی ڤیدیۆکە", ["تەنها قسەکردن (ئاسایی)", "قسەکردن و گۆرانی (گۆرانی بە زەرد)"], horizontal=True)
+        is_mixed_audio = "گۆرانی" in audio_mode
 
         st.markdown("---")
         font_size = st.slider("📐 قەبارەی فۆنتی ژێرنووس", 20, 80, 52)
@@ -519,7 +544,7 @@ def main():
             st.session_state.sub_temp_dir = temp_dir
             st.session_state.sub_input_path = in_p
             
-            raw_text = process_full_video(api_key.strip(), in_p)
+            raw_text = process_full_video(api_key.strip(), in_p, is_mixed_audio)
             if raw_text:
                 st.session_state.sub_raw = raw_text
                 st.rerun()
