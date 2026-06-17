@@ -283,7 +283,7 @@ Output format (ALWAYS return a JSON array of the EXACT SAME LENGTH as input):
 # ══════════════════════════════════════════════════════════
 @st.cache_resource
 def load_whisper():
-    # گەڕاندنەوەی مۆدێلی زۆر بەهێزی جاران
+    # گەڕانەوە بۆ مۆدێلی بەهێز و فەرمیی جاران
     return WhisperModel("small", device="cpu", compute_type="int8")
 
 def extract_audio(video_path, audio_path):
@@ -295,7 +295,7 @@ def transcribe_audio(audio_path):
         audio_path,
         beam_size=5,
         word_timestamps=True,
-        # کوژاندنەوەی فلتەری بێدەنگی بۆ دۆزینەوەی تەواوی قسەکان بە شێوەی خۆکارانە و بەبێ کێشە
+        # فلتەری بێدەنگی وەک کۆدە فەرمییەکەی جاران لەسەر False دەمێنێتەوە بۆ ڕێگریکردن لە کراش
         vad_filter=False,
         vad_parameters=dict(min_silence_duration_ms=300)
     )
@@ -443,7 +443,7 @@ def build_ass_file(cues, font_size, wm_text, wm_color, wm_font_size, wm_alignmen
         ass.append(f"Dialogue: 0,0:00:00.00,9:59:59.99,WatermarkStyle,,0,0,0,,{{\\an{wm_alignment}}}{wm_text}")
         
     for c in cues:
-        # لێرەدا چاکسازییەکە دەکەین بۆ ئەوەی تاگی ڕەنگەکان لەناو نەچن
+        # لێرەدا چاکسازییەکەمان پاراستووە بۆ ئەوەی تاگی ڕەنگەکان لە مۆنتاژەکەدا بە تەواوی سەلامەت بن
         if "\\" in c['text'] or "{" in c['text'] or "&" in c['text']:
             txt = c['text']
         else:
@@ -480,22 +480,13 @@ def main():
     tab_sub, tab_conv = st.tabs(["🎬 ژێرنووس", "🔄 گۆڕینی فۆرمات"])
 
     with tab_sub:
-        # کلیلەکە بە شێوەیەکی سەلامەت لەسەر هەردوو سێرڤەری ستریملیت و هاگینگ فەیس دەخوێنێتەوە بۆ ڕێگریکردن لە کراش
-        default_key = os.environ.get("GEMINI_API_KEY", "")
-        if not default_key:
-            try:
-                default_key = st.secrets.get("GEMINI_API_KEY", "")
-            except Exception:
-                default_key = ""
+        # کلیلە سەرەکییەکەت بە شێوەیەکی خۆکار لە Secrets دەخوێنێتەوە ئەگەر دانرابێت
+        default_key = st.secrets.get("GEMINI_API_KEY", "")
         
         # سندوقی نووسینەکە دەهێنینەوە کە خۆکارانە کلیلە ئەسڵییەکەت تێدایە، بەڵام دەتوانیت لێرەش کلیلەکەت بگۆڕیت ئەگەر تەواو بوو!
         api_key = st.text_input("🔑 Gemini API Key", type="password", value=default_key)
         
         video_file = st.file_uploader("📁 ڤیدیۆ بار بکە (MP4/MOV)", type=["mp4", "mov"])
-
-        st.markdown("---")
-        direction_label = st.radio("🌐 ئاڕاستەی وەرگێڕان", ["بیانی / ئینگلیزی  →  کوردی سۆرانی", "کوردی  →  ئینگلیزی"], horizontal=True)
-        dir_key = "ku→en" if "کوردی  →" in direction_label else "→ku"
 
         st.markdown("---")
         font_size = st.slider("📐 قەبارەی فۆنتی ژێرنووس", 20, 80, 52)
