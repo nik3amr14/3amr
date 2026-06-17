@@ -474,7 +474,9 @@ def main():
     tab_sub, tab_conv = st.tabs(["🎬 ژێرنووس", "🔄 گۆڕینی فۆرمات"])
 
     with tab_sub:
-        api_key = st.text_input("🔑 Gemini API Key", type="password")
+        # گۆڕانکارییەکە لێرەدایە: خوێندنەوەی کلیلەکە لە Secrets لەبری نووسینی بە دەست
+        api_key = st.secrets.get("GEMINI_API_KEY", "")
+        
         video_file = st.file_uploader("📁 ڤیدیۆ بار بکە (MP4/MOV)", type=["mp4", "mov"])
 
         st.markdown("---")
