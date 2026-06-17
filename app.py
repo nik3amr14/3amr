@@ -470,6 +470,10 @@ def process_full_video(api_key, video_path, is_mixed_audio, existing_raw=""):
 # ══════════════════════════════════════════════════════════
 #  ASS & SRT BUILDERS
 # ══════════════════════════════════════════════════════════
+def hex_to_ass(h: str) -> str:
+    h = h.lstrip("#").upper().ljust(6, "0")
+    return f"&H00{h[4:6]}{h[2:4]}{h[0:2]}&"
+
 def build_ass_file(cues, font_size, wm_text, wm_color, wm_font_size, wm_alignment):
     font_name = find_kurdish_font()
     wm_ass = hex_to_ass(wm_color)
@@ -573,6 +577,15 @@ def main():
             st.session_state.sub_raw = None
             st.session_state.sub_input_path = None
             st.session_state.sub_temp_dir = None
+
+        # 🛠️ پێناسەکردنی ئەم فەنکشنە بە فەرمی لێرە بۆ ڕێگریکردن لە هەڵەی پێشتر
+        def _cleanup_sub_session():
+            if st.session_state.sub_temp_dir and os.path.exists(st.session_state.sub_temp_dir):
+                shutil.rmtree(st.session_state.sub_temp_dir, ignore_errors=True)
+            st.session_state.sub_temp_dir   = None
+            st.session_state.sub_input_path = None
+            st.session_state.sub_raw        = None
+            st.session_state.pop("sub_editor_box", None)
 
         st.markdown("---")
         col_run, col_resume, col_reset = st.columns([2, 2, 1])
