@@ -194,7 +194,7 @@ def gemini_translate(api_keys, current_key_index, transcript_chunk, songs_mode=F
 ٢. پاراستنی کاتەکان (Exact Timestamps): کلیلەکانی "start" و "end" نابێت بە هیچ هۆکارێک بە تەنانەت 0.001 چرکەش بگۆڕدرێن. کاتەکان موو ناکەن و دەبێت وەک خۆیان لەناو کۆدی JSON بنووسرێنەوە.
 ٣. یاسای هاوتایی و نەپەڕاندنی دێڕەکان: دەبێت هەموو دێڕەکان بە بێ جیاوازی دێڕ بە دێڕ وەربگێڕدرێن. ژمارەی دێڕەکان لە وەڵامدا دەبێت بە تەواوی هاوتای ڕستەکانی ناوچەک بێت.
 ٤. قەدەغەکردنی تەواوی خاڵبەندییەکان: لە دەقی وەرگێڕدراوی کوردی بە هیچ شێوەیەک هێمای خاڵبەندی وەک (؟ . : ! ، ، " ' - _ ? !) بەکارمەهێنه.
-٥. فۆرماتی دروستی JSON: تەنها و تەنها پێکهاتەی یاسایی و خاوێنی JSON بنووسەوە بەبێ هیچ پێشەکییەک، ڕوونکردنەوەیەک، یان دەقی زیادە لە دەرەوەی کەوانەکان.
+٥. فۆرماتی دروستی JSON: تەنها و تەنها پێکهاتەی ڕاست و دروستی JSON دەربکە، هیچ نووسین و ڕوونکردنەوەیەکی تر لە دەرەوەی کەوانەکان مەنووسە.
 """
     if songs_mode:
         system_prompt += "\n٦. ئەگەر دێڕەکە گۆرانی بوو، هێمای 🎵 بخەرە سەرەتای دێڕەکە."
@@ -215,7 +215,7 @@ Output format (ALWAYS return a JSON array of the EXACT SAME LENGTH as input):
     max_attempts = len(api_keys) * 3
     attempt = 0
     
-    # دروستکردنی زنجیرەی مۆدێلی یەدەگ لەسەر بنەمای هەڵبژاردنی سەرەکی بەکارهێنەر [1, 2]
+    # دروستکردنی زنجیرەی مۆدێلی یەدەگ لەسەر بنەمای هەڵبژاردنی سەرەکی بەکارهێنەر
     models_to_try = [selected_model]
     fallback_pool = ["gemini-3.5-flash", "gemini-2.5-flash", "gemini-1.5-flash", "gemini-1.5-pro"]
     for m in fallback_pool:
@@ -227,7 +227,7 @@ Output format (ALWAYS return a JSON array of the EXACT SAME LENGTH as input):
             current_api_key = api_keys[current_key_index]
             client = genai.Client(api_key=current_api_key)
             
-            # نیشاندانی تێکستی گونجاو لەسەر بنەمای شێوازی کارکردن
+            # هەڵبژاردنی شێوازی کارکردنی جیاواز
             if thinking_budget == 0:
                 status_msg.info(f"⚡ خەریکی وەرگێڕانی خێران بە کلیلی ژمارە {current_key_index + 1}... (هەوڵی {attempt+1}/{max_attempts})")
                 config_params = dict(
@@ -259,7 +259,7 @@ Output format (ALWAYS return a JSON array of the EXACT SAME LENGTH as input):
                     )
                 )
             
-            # لۆجیکی خۆکار بۆ سووڕانەوە بەناو مۆدێلەکاندا ئەگەر یەکێکیان قەرەباڵغ بوو [1, 2]
+            # لۆجیکی خۆکار بۆ سووڕانەوە بەناو مۆدێلەکاندا ئەگەر یەکێکیان قەرەباڵغ بوو
             resp = None
             for m_name in models_to_try:
                 try:
@@ -550,8 +550,8 @@ def main():
             "gemini-1.5-flash (یەکجار سووک و خێرا)",
             "gemini-1.5-pro (زۆر زیرەک و قووڵ - بۆ تێکستی ئەدەبی قورس)"
         ],
-        index=1, # مۆدێلی ٢.٥ فلاش وەک جێگیر بەهۆی سەقامگیری
-        help="ئەگەر مۆدێلی نوێی ٣.٥ قەرەباڵغ بوو، دەتوانیت لێرەوە بیگۆڕیت بۆ مۆدێلەکانی تر."
+        index=1, # مۆدێلی ٢.٥ بە جێگیری
+        help="ئەگەر مۆدێلی یەکەم لۆدی زۆری لەسەر بوو، دەتوانیت مۆدێلی تر تاقی بکەیتەوە."
     )
     # دەرهێنانی تەنها ناوی فەرمی مۆدێلەکە [1, 2]
     selected_model = selected_model_input.split(" ")[0].strip()
