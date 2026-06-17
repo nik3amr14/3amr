@@ -283,7 +283,6 @@ Output format (ALWAYS return a JSON array of the EXACT SAME LENGTH as input):
 # ══════════════════════════════════════════════════════════
 @st.cache_resource
 def load_whisper():
-    # گەڕانەوە بۆ مۆدێلی بەهێز و فەرمیی جاران
     return WhisperModel("small", device="cpu", compute_type="int8")
 
 def extract_audio(video_path, audio_path):
@@ -295,8 +294,7 @@ def transcribe_audio(audio_path):
         audio_path,
         beam_size=5,
         word_timestamps=True,
-        # فلتەری بێدەنگی وەک کۆدە فەرمییەکەی جاران لەسەر False دەمێنێتەوە بۆ ڕێگریکردن لە کراش
-        vad_filter=False,
+        vad_filter=True,
         vad_parameters=dict(min_silence_duration_ms=300)
     )
     
@@ -443,11 +441,7 @@ def build_ass_file(cues, font_size, wm_text, wm_color, wm_font_size, wm_alignmen
         ass.append(f"Dialogue: 0,0:00:00.00,9:59:59.99,WatermarkStyle,,0,0,0,,{{\\an{wm_alignment}}}{wm_text}")
         
     for c in cues:
-        # لێرەدا چاکسازییەکەمان پاراستووە بۆ ئەوەی تاگی ڕەنگەکان لە مۆنتاژەکەدا بە تەواوی سەلامەت بن
-        if "\\" in c['text'] or "{" in c['text'] or "&" in c['text']:
-            txt = c['text']
-        else:
-            txt = clean_punctuation(c['text'])
+        txt = clean_punctuation(c['text'])
         ass.append(f"Dialogue: 0,{c['start']},{c['end']},{c.get('style','Default')},,0,0,0,,{c.get('alignment_tag','{\\an2}')}{txt}")
     return "\n".join(ass)
 
@@ -480,12 +474,7 @@ def main():
     tab_sub, tab_conv = st.tabs(["🎬 ژێرنووس", "🔄 گۆڕینی فۆرمات"])
 
     with tab_sub:
-        # کلیلە سەرەکییەکەت بە شێوەیەکی خۆکار لە Secrets دەخوێنێتەوە ئەگەر دانرابێت
-        default_key = st.secrets.get("GEMINI_API_KEY", "")
-        
-        # سندوقی نووسینەکە دەهێنینەوە کە خۆکارانە کلیلە ئەسڵییەکەت تێدایە، بەڵام دەتوانیت لێرەش کلیلەکەت بگۆڕیت ئەگەر تەواو بوو!
-        api_key = st.text_input("🔑 Gemini API Key", type="password", value=default_key)
-        
+        api_key = st.secrets.get("GEMINI_API_KEY", "")
         video_file = st.file_uploader("📁 ڤیدیۆ بار بکە (MP4/MOV)", type=["mp4", "mov"])
 
         st.markdown("---")
@@ -497,11 +486,9 @@ def main():
         with c1:
             anime_name = st.text_input("🎬 ناوی فیلم / زنجیرە (بۆ گۆشەی سەرەوە)")
             translator_name = st.text_input("✍️ ناوی وەرگێڕ")
-            translator_color = st.color_picker("🎨 ڕەنگی ناوی وەرگێڕ", "#00FF00")
         with c2:
             season_ep = st.text_input("📺 سیزن / ئەڵقە")
             tech_name = st.text_input("💻 ناوی تەکنیک")
-            tech_color = st.color_picker("🎨 ڕەنگی ناوی تەکنیک", "#00FFFF")
             
         intro_duration = st.number_input("⏱️ کاتی مانەوەی ناوەکانی دەستپێک (بە چرکە)", min_value=1.0, max_value=15.0, value=3.0, step=0.5)
 
@@ -522,7 +509,7 @@ def main():
 
         st.markdown("---")
         if st.button("🧠 ١. دەرهێنان و وەرگێڕان (دەستپێکردن)", type="primary", use_container_width=True):
-            if not api_key: st.error("❌ کلیلی Gemini بنووسە."); return
+            if not api_key: st.error("❌ کلیلی Gemini لە بەشی Secrets نەدۆزرایەوە."); return
             if not video_file: st.error("❌ ڤیدیۆ بار بکە."); return
             
             temp_dir = tempfile.mkdtemp()
@@ -532,7 +519,6 @@ def main():
             st.session_state.sub_temp_dir = temp_dir
             st.session_state.sub_input_path = in_p
             
-            # بەستنەوەی زمان لێرەدا جێبەجێ کراوە
             raw_text = process_full_video(api_key.strip(), in_p)
             if raw_text:
                 st.session_state.sub_raw = raw_text
@@ -562,23 +548,21 @@ def main():
                 current_intro_time = 0.0
                 if translator_name: 
                     end_time = current_intro_time + intro_duration
-                    color_code = hex_to_ass(translator_color)
                     intro.append({
                         "start": float_to_ass_time(current_intro_time), 
                         "end": float_to_ass_time(end_time), 
                         "alignment_tag": "{\\an2}", 
-                        "text": f"{{\\c{color_code}}}وەرگێڕان\\N{translator_name}"
+                        "text": f"وەرگێڕان\\N{translator_name}"
                     })
                     current_intro_time = end_time
                     
                 if tech_name: 
                     end_time = current_intro_time + intro_duration
-                    color_code = hex_to_ass(tech_color)
                     intro.append({
                         "start": float_to_ass_time(current_intro_time), 
                         "end": float_to_ass_time(end_time), 
                         "alignment_tag": "{\\an2}", 
-                        "text": f"{{\\c{color_code}}}تەکنیک\\N{tech_name}"
+                        "text": f"تەکنیک\\N{tech_name}"
                     })
                     current_intro_time = end_time
 
