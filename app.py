@@ -36,8 +36,19 @@ FORMAT_MAP = {
     "MP3  — تەنها دەنگ":             (["-vn","-c:a","libmp3lame","-b:a","320k"],                                                       "audio/mpeg",       ".mp3"),
 }
 
+def ensure_streamlit_config():
+    """سنووری بارکردن بۆ 700MB زیاد دەکات بۆ ڤیدیۆی گەورە"""
+    try:
+        cfg_dir = os.path.join(APP_DIR, ".streamlit")
+        cfg_path = os.path.join(cfg_dir, "config.toml")
+        os.makedirs(cfg_dir, exist_ok=True)
+        if not os.path.exists(cfg_path):
+            with open(cfg_path, "w", encoding="utf-8") as f:
+                f.write("[server]\nmaxUploadSize = 700\n")
+    except Exception:
+        pass
+
 def find_kurdish_font():
-    # گەڕان لە زۆرترین شوێن بۆ دڵنیابوونەوە لە دۆزینەوەی فۆنتەکە لەسەر هەموو جۆرە سێرڤەرێک
     possible_paths = [
         os.path.join(APP_DIR, KU_FONT_FILE),
         os.path.join(ROOT_DIR, KU_FONT_FILE),
@@ -97,16 +108,18 @@ def secs(ts: str) -> float:
         return 999.0
 
 def clean_punctuation(t: str) -> str:
+    """لابردنی تەواوی خاڵبەندییەکان بە توندی"""
     bad_chars = "؟.:!ـ؛”’?,;\"'!-_()[]{}،,+=*#$@^&|~`"
     for char in bad_chars:
         t = t.replace(char, "")
     return " ".join(t.split())
 
-def soften_explicit_terms(text: str) -> str:
-    replacements = {"sex": "پەیوەندیی تایبەت", "sexual": "تایبەت", "fucking": "زۆر", "fuck": "نەفرەت", "motherfucker": "بێڕێز"}
-    for src, dst in replacements.items():
-        text = re.sub(src, dst, text, flags=re.IGNORECASE)
-    return text
+def split_song_tag(text: str):
+    """جیاکردنەوەی هێمای گۆرانی بۆ گۆڕینی ڕەنگەکەی بۆ زەرد"""
+    text = text.strip()
+    if text.startswith("🎵"):
+        return True, text.replace("🎵", "", 1).strip()
+    return False, text
 
 # ══════════════════════════════════════════════════════════
 #  ٢. ئامرازەکانی کات و دەق
@@ -115,6 +128,7 @@ _CUE_RE = re.compile(r"(\d{1,2}:\d{2}:\d{2}[.,]\d{1,3})\s*-->\s*(\d{1,2}:\d{2}:\
 
 def parse_raw_text(raw: str):
     out = []
+    if not raw: return out
     for line in raw.splitlines():
         m = _CUE_RE.match(line.strip())
         if m: 
@@ -125,15 +139,16 @@ def parse_raw_text(raw: str):
             })
     return out
 
-def get_video_duration(path: str) -> float:
-    try:
-        r = subprocess.run(
-            ["ffprobe", "-v", "error", "-show_entries", "format=duration",
-             "-of", "default=noprint_wrappers=1:nokey=1", path],
-            capture_output=True, text=True, check=True)
-        return float(r.stdout.strip())
-    except Exception:
-        return 540.0
+def parse_existing_raw_to_last_time(raw: str) -> float:
+    """دۆزینەوەی کۆتا کاتی وەرگێڕدراو بۆ بەردەوامبوون (Smart Resume)"""
+    cues = parse_raw_text(raw)
+    if not cues: return 0.0
+    last_end = 0.0
+    for c in cues:
+        e = secs(c["end"])
+        if e > last_end:
+            last_end = e
+    return last_end
 
 def float_to_ass_time(seconds: float) -> str:
     h = int(seconds // 3600)
@@ -143,6 +158,7 @@ def float_to_ass_time(seconds: float) -> str:
     return f"{h}:{m:02d}:{s:02d}.{ms:02d}"
 
 def shift_transcript(raw_text: str, delay_seconds: float) -> str:
+    """پێشخستن یان دواخستنی کاتی ژێرنووسەکان"""
     if delay_seconds == 0.0:
         return raw_text
     lines = []
@@ -160,28 +176,14 @@ def shift_transcript(raw_text: str, delay_seconds: float) -> str:
             lines.append(line)
     return "\n".join(lines)
 
-def _dedup(raw: str) -> str:
-    seen, out = set(), []
-    for line in raw.splitlines():
-        m = _CUE_RE.match(line.strip())
-        if m:
-            if m.group(1) in seen:
-                continue
-            seen.add(m.group(1))
-        out.append(line)
-    return "\n".join(out)
-
 # ══════════════════════════════════════════════════════════
 #  GEMINI JSON PARSER
 # ══════════════════════════════════════════════════════════
 def extract_json(text: str):
     text = text.strip()
-    if text.startswith("```json"):
-        text = text.replace("```json", "", 1)
-    if text.startswith("```"):
-        text = text.replace("```", "", 1)
-    if text.endswith("```"):
-        text = text[:-3]
+    if text.startswith("```json"): text = text.replace("```json", "", 1)
+    if text.startswith("```"): text = text.replace("```", "", 1)
+    if text.endswith("```"): text = text[:-3]
     text = text.strip()
     try:
         return json.loads(text)
@@ -192,9 +194,6 @@ def extract_json(text: str):
         raise ValueError("Gemini JSON parse failed")
     return json.loads(match.group(1))
 
-# ══════════════════════════════════════════════════════════
-#  TIMESTAMP PROTECTION
-# ══════════════════════════════════════════════════════════
 def validate_cues(cues):
     validated = []
     current_start = 0.0
@@ -206,9 +205,7 @@ def validate_cues(cues):
             new_text = str(cue["text"]).strip()
         except Exception:
             continue
-        if not new_text:
-            continue
-        if new_end <= new_start:
+        if not new_text or new_end <= new_start:
             continue
         if new_start < current_start:
             new_start = current_end
@@ -224,36 +221,32 @@ def validate_cues(cues):
     return validated
 
 # ══════════════════════════════════════════════════════════
-#  GEMINI TRANSLATION (100% Human-like & Strict)
+#  GEMINI TRANSLATION (Strict Context-Aware)
 # ══════════════════════════════════════════════════════════
-def gemini_translate(client, transcript_chunk, pass_number, is_mixed_audio):
-    
-    song_instruction = ""
-    if is_mixed_audio:
-        song_instruction = "٨. جیاکردنەوەی گۆرانی: ئەگەر هەستت کرد دێڕەکە هۆنراوەی گۆرانییە یان مۆسیقایە، دەبێت لە سەرەتای دەقە کوردییەکە نیشانەی 🎵 دابنێیت. ئەگەر قسەی ئاسایی بوو هیچ نیشانەیەک دامەنێ."
-    else:
-        song_instruction = "٨. لابردنی تەواوی خاڵبەندی و هێماکان: بە هیچ شێوەیەک هێماکانی خاڵبەندی بەکارمەهێنە."
-
-    system_prompt = f"""
+def gemini_translate(client, transcript_chunk, pass_number=1, songs_mode=False):
+    system_prompt = """
 تۆ باشترین و بەتواناترین وەرگێڕ و دەرهێنەری دۆبلاژی سینەماییت لە کوردستان. ئەرکەکەت: دانانی ژێرنووسی سینەماییانەی زۆر شاز و ناوازە بۆ ئەم ڤیدیۆیە بە کوردی سۆرانی.
 
 یاساکانی مێشکی تۆ (زۆر گرنگ و توند):
-١. وەرگێڕانی ١٠٠٪ مرۆڤانە و شاز: بە هیچ شێوەیەک وەرگێڕانی وشە بە وشە (حەرفی) یان وەرگێڕانی ئامێری مەکە! مانای قسەکان، هەست و سۆزی کارەکتەرەکان بگرە و بیانکە بە کوردییەکی زۆر پاراو، جوان، و مانا دار.
-٢. بەکارهێنانی ئیدیۆم و پەند: ئەگەر لە زمانە بیانییەکەدا ئیدیۆمێک یان قسەیەکی خوازراو هەبوو، ڕێک بەرامبەرە جوانەکەی لە زمانی کوردیدا بەکاربهێنە.
+١. تێگەیشتن لە مانا (Context): بە هیچ شێوەیەک وەرگێڕانی وشە بە وشە (حەرفی) مەکە! سەیری ڕستەکە بکە بزانە مەبەستی چییە. مانای قسەکان و هەست و سۆزی کارەکتەرەکان بگرە و بیانکە بە کوردییەکی زۆر پاراو، جوان و سینەمایی.
+٢. ئیدیۆم و پەند: ئەگەر ئیدیۆمێکی بیانی هەبوو، ڕێک بەرامبەرە جوانەکەی لە زمانی کوردیدا بەکاربهێنە، نەک مانا حەرفییەکەی.
 ٣. جیاکردنەوەی کارەکتەرەکان: ئەگەر هەستت کرد دوو کەس قسە دەکەن، بە جوانی دیالۆگەکانیان جیا بکەرەوە.
 ٤. پاراستنی ڕێزمانی و جێناوەکان: ئەگەر کارەکتەرەکە گوتی "تۆ"، دەبێت بە "تۆ" وەربگێڕدرێت، هەرگیز مەکە بە "من".
 ٥. زۆر گرنگ: تۆ لیستێک لە ژێرنووست پێدەدرێت. دەبێت **هەموو دانە بە دانەی لیستەکە** وەربگێڕیت. بە هیچ شێوەیەک نابێت یەک دێڕیش بپەڕێنیت یان کورت بکەیتەوە.
 ٦. کاتەکان (start و end) بە تەواوی وەک خۆیان بهێڵەوە و دەستکارییان مەکە.
-٧. ناوی کارەکتەرەکان قەدەغەیە بنووسرێت.
-{song_instruction}
+٧. لابردنی تەواوی خاڵبەندی و هێماکان: بە هیچ شێوەیەک هێماکانی خاڵبەندی وەک (؟ . : ! ، ، " ' - _ ? !) بەکارمەهێنە.
+"""
+    if songs_mode:
+        system_prompt += "\n٨. تێبینی گرنگ: ئەگەر هەستت کرد دێڕەکە گۆرانییە یان هۆنراوەیە، تکایە هێمای 🎵 بخەرە سەرەتای دێڕە وەرگێڕدراوەکە. تەنها بۆ گۆرانی ئەمە بکە."
 
+    system_prompt += """
 Output format (ALWAYS return a JSON array of the EXACT SAME LENGTH as input):
 [
-  {{
+  {
     "start": 0.00,
     "end": 1.50,
     "text": "First translated line..."
-  }}
+  }
 ]
 """
     user_prompt = f"Translate ALL of these cues without skipping any:\n{json.dumps(transcript_chunk, ensure_ascii=False)}"
@@ -262,6 +255,7 @@ Output format (ALWAYS return a JSON array of the EXACT SAME LENGTH as input):
     
     for attempt in range(30):
         try:
+            # بەکارهێنانی مۆدێلی gemini-3.5-flash بە فەرمی
             resp = client.models.generate_content(
                 model="gemini-3.5-flash",
                 contents=[user_prompt],
@@ -282,30 +276,23 @@ Output format (ALWAYS return a JSON array of the EXACT SAME LENGTH as input):
     return []
 
 # ══════════════════════════════════════════════════════════
-#  FASTER WHISPER (Word-Level Silence Detection)
+#  FASTER WHISPER (Word-Level + Segment Fallback Fix)
 # ══════════════════════════════════════════════════════════
 @st.cache_resource
 def load_whisper():
     return WhisperModel("small", device="cpu", compute_type="int8")
 
 def extract_audio(video_path, audio_path):
-    # فلتەری دەنگی قسەکردنی مرۆڤ (بڕینی دەنگە بمەکانی تەقینەوە و دەنگی مۆسیقای توند لە نێوان ٢٠٠ بۆ ٣٥٠٠ هێرتز)
-    subprocess.run([
-        "ffmpeg", "-y", "-i", video_path, "-vn", "-ac", "1", "-ar", "16000",
-        "-af", "highpass=f=200,lowpass=f=3500",
-        audio_path
-    ], capture_output=True, check=True)
+    subprocess.run(["ffmpeg", "-y", "-i", video_path, "-vn", "-ac", "1", "-ar", "16000", audio_path], capture_output=True, check=True)
 
-def transcribe_audio(audio_path, is_mixed_audio):
+def transcribe_audio(audio_path, vad_filter=True):
     model = load_whisper()
-    
-    # ئەگەر تێکەڵ بێت (گۆرانی تێدابێت)، فلتەری بێدەنگی لادەبەین بۆ ئەوەی گۆرانییەکەش بخوێنێتەوە
     segments, info = model.transcribe(
         audio_path,
         beam_size=5,
         word_timestamps=True,
-        vad_filter=not is_mixed_audio, 
-        vad_parameters=dict(min_silence_duration_ms=300) if not is_mixed_audio else None
+        vad_filter=vad_filter,
+        vad_parameters=dict(min_silence_duration_ms=300) if vad_filter else None
     )
     
     cues = []
@@ -314,23 +301,23 @@ def transcribe_audio(audio_path, is_mixed_audio):
     last_end = None
     
     for seg in segments:
-        # 🛟 فەیلسەیف: ئەگەر بەهۆی دەنگی شەڕ و مۆسیقاوە نەیتوانی کاتی وشە بە وشە بپێوێت،
-        # کاتی گشتی ڕستەکە وەردەگرین تا دیالۆگەکە لەدەست نەچێت و ئیرۆر نەدات.
+        # چارەسەری کێشەی وەستان لە کاتی شەڕ و مۆسیقا (Fallback)
+        # ئەگەر وشەکان نەدۆزرانەوە، کاتی تەواوی ڕستەکە وەردەگرێت
         if not seg.words:
-            cues.append({
-                "start": round(seg.start, 2),
-                "end": round(seg.end, 2),
-                "text": seg.text.strip()
-            })
+            if seg.text and seg.text.strip():
+                cues.append({
+                    "start": round(float(seg.start), 2),
+                    "end": round(float(seg.end), 2),
+                    "text": seg.text.strip()
+                })
             continue
-            
+
         for w in seg.words:
             word_start = float(w.start)
             word_end = float(w.end)
             word_text = str(w.word).strip()
             
-            if not word_text:
-                continue
+            if not word_text: continue
                 
             if start_time is None:
                 start_time = word_start
@@ -367,9 +354,6 @@ def transcribe_audio(audio_path, is_mixed_audio):
         
     return cues
 
-# ══════════════════════════════════════════════════════════
-#  BUILD CHUNKS FOR GEMINI
-# ══════════════════════════════════════════════════════════
 def build_translation_chunks(cues, chunk_minutes=5):
     max_seconds = chunk_minutes * 60
     chunks, current = [], []
@@ -385,9 +369,6 @@ def build_translation_chunks(cues, chunk_minutes=5):
     if current: chunks.append(current)
     return chunks
 
-# ══════════════════════════════════════════════════════════
-#  50 SECOND THROTTLE
-# ══════════════════════════════════════════════════════════
 def throttle_countdown():
     holder = st.empty()
     for i in range(THROTTLE_SECONDS, 0, -1):
@@ -396,66 +377,57 @@ def throttle_countdown():
     holder.empty()
 
 # ══════════════════════════════════════════════════════════
-#  ⚙️ بەڕێوەبەری سەرەکی پڕۆژەکە (ORCHESTRATOR)
+#  ⚙️ بەڕێوەبەری سەرەکی پڕۆژەکە (Smart Resume)
 # ══════════════════════════════════════════════════════════
-def process_full_video(api_key, video_path, is_mixed_audio, existing_raw=""):
+def process_full_video(api_key, video_path, vad_filter=True, songs_mode=False, existing_raw=""):
     audio_path = video_path.replace(".mp4", ".wav")
+    
+    last_translated_sec = parse_existing_raw_to_last_time(existing_raw)
     
     with st.spinner("🎵 خەریکی دەرهێنانی دەنگی ڤیدیۆکەیە..."):
         extract_audio(video_path, audio_path)
         
     with st.spinner("📝 خەریکی نووسینەوەی دەنگەکەیە بە وردی (Faster-Whisper)..."):
-        cues = transcribe_audio(audio_path, is_mixed_audio)
+        cues = transcribe_audio(audio_path, vad_filter=vad_filter)
         if not cues:
             st.error("❌ هیچ دیالۆگێک لە ڤیدیۆکەدا نەدۆزرایەوە.")
-            return ""
+            return existing_raw
             
     with st.spinner("🧠 خەریکی وەرگێڕانە بۆ کوردی سۆرانی سینەمایی..."):
         chunks = build_translation_chunks(cues, chunk_minutes=TRANSLATION_PASS_MINUTES)
+        
+        # هێشتنەوەی ئەوانەی پێشتر وەرگێڕدراون
         all_cues = []
-        last_translated_sec = 0.0
-        
-        # گۆڕینەوەی دەقە کۆنەکان بۆ سەر پاشەکەوتی فۆرماتی چاککراو
-        if existing_raw.strip():
-            existing_cues = parse_raw_text(existing_raw)
-            if existing_cues:
-                formatted_existing = []
-                for ec in existing_cues:
-                    formatted_existing.append({
-                        "start": secs(ec["start"]),
-                        "end": secs(ec["end"]),
-                        "text": ec["text"]
-                    })
-                all_cues.extend(formatted_existing)
-                last_translated_sec = formatted_existing[-1]["end"]
-                st.info(f"🔄 دەستپێکردنەوە لە کاتی وەرگێڕانی: {sec_to_ass(last_translated_sec)}")
-                
+        if existing_raw:
+            all_cues.extend(parse_raw_text(existing_raw))
+            
         total = len(chunks)
-        progress = st.progress(min(last_translated_sec / get_video_duration(video_path), 1.0) if get_video_duration(video_path) > 0 else 0.0)
-        
+        progress = st.progress(0)
         local_client = genai.Client(api_key=api_key)
         
+        any_new_translation = False
+        
         for index, chunk in enumerate(chunks):
-            # ئەگەر پارچەکە پێشتر وەرگێڕدرابوو تێپەڕی دەکەین
-            if chunk and chunk[-1]["end"] <= last_translated_sec:
+            chunk_last_end = chunk[-1]["end"] if chunk else 0.0
+            
+            # تێپەڕاندنی ئەو پارچانەی کە پێشتر وەرگێڕدراون (Skip Logic)
+            if chunk_last_end <= last_translated_sec:
                 progress.progress((index + 1) / total)
                 continue
                 
-            # تەنها ئەو ڕستانە وەردەگێڕین کە لە کاتی لیمیتی کۆن تێنەپەڕیون
-            remaining_cues_in_chunk = [c for c in chunk if c["start"] >= last_translated_sec]
-            if not remaining_cues_in_chunk:
+            # فلتەرکردنی ئەو دێڕانەی ناو پارچەکە کە کاتەکەیان لە دوای کۆتا کاتی وەرگێڕدراوەوەیە
+            active_items = [c for c in chunk if c["start"] >= last_translated_sec]
+            if not active_items:
                 progress.progress((index + 1) / total)
                 continue
                 
-            translated = gemini_translate(local_client, remaining_cues_in_chunk, index + 1, is_mixed_audio)
-            if not translated:
-                st.error("❌ وەرگێڕان وەستا بەهۆی کێشەی کلیلەکە یان سێرڤەرەوە.")
-                break
-                
-            all_cues.extend(translated)
-            progress.progress((index + 1) / total)
-            if index < total - 1:
+            if any_new_translation:
                 throttle_countdown()
+                
+            translated = gemini_translate(local_client, active_items, pass_number=index + 1, songs_mode=songs_mode)
+            all_cues.extend(translated)
+            any_new_translation = True
+            progress.progress((index + 1) / total)
                 
         all_cues.sort(key=lambda x: x["start"])
         validated = validate_cues(all_cues)
@@ -468,11 +440,14 @@ def process_full_video(api_key, video_path, is_mixed_audio, existing_raw=""):
     return "\n".join(raw_lines)
 
 # ══════════════════════════════════════════════════════════
-#  ASS & SRT BUILDERS
+#  ASS & SRT BUILDERS (Yellow Songs Support)
 # ══════════════════════════════════════════════════════════
 def hex_to_ass(h: str) -> str:
     h = h.lstrip("#").upper().ljust(6, "0")
     return f"&H00{h[4:6]}{h[2:4]}{h[0:2]}&"
+
+SONG_COLOR_ASS = "&H0000FFFF&" # زەرد بۆ ASS
+SONG_COLOR_SRT = "#FFFF00"     # زەرد بۆ SRT
 
 def build_ass_file(cues, font_size, wm_text, wm_color, wm_font_size, wm_alignment):
     font_name = find_kurdish_font()
@@ -491,17 +466,13 @@ def build_ass_file(cues, font_size, wm_text, wm_color, wm_font_size, wm_alignmen
         ass.append(f"Dialogue: 0,0:00:00.00,9:59:59.99,WatermarkStyle,,0,0,0,,{{\\an{wm_alignment}}}{wm_text}")
         
     for c in cues:
-        raw_txt = c['text']
-        is_song = "🎵" in raw_txt
+        is_song, clean_txt = split_song_tag(c['text'])
+        clean_txt = clean_punctuation(clean_txt)
         
-        # سڕینەوەی نیشانەی 🎵 و خاڵبەندییەکان بۆ ناو ڤیدیۆکە
-        txt = clean_punctuation(raw_txt.replace("🎵", ""))
+        color_prefix = f"{{\\c{SONG_COLOR_ASS}}}" if is_song else ""
+        align_tag = c.get('alignment_tag', '{\\an2}')
         
-        # ئەگەر گۆرانی بوو، کۆدی ڕەنگی زەردی بۆ زیاد دەکەین
-        color_tag = "{\\c&H0000FFFF&}" if is_song else ""
-        align_tag = c.get('alignment_tag','{\\an2}')
-        
-        ass.append(f"Dialogue: 0,{c['start']},{c['end']},{c.get('style','Default')},,0,0,0,,{align_tag}{color_tag}{txt}")
+        ass.append(f"Dialogue: 0,{c['start']},{c['end']},{c.get('style','Default')},,0,0,0,,{align_tag}{color_prefix}{clean_txt}")
     return "\n".join(ass)
 
 def build_srt_file(cues):
@@ -510,13 +481,12 @@ def build_srt_file(cues):
         s = sec_to_srt(secs(c["start"]))
         e = sec_to_srt(secs(c["end"]))
         
-        raw_txt = c['text']
-        is_song = "🎵" in raw_txt
-        
-        clean_txt = clean_punctuation(re.sub(r'\{\\[^}]*\}', '', raw_txt.replace("🎵", "")))
+        is_song, clean_txt = split_song_tag(c['text'])
+        clean_txt = clean_punctuation(clean_txt)
+        clean_txt = re.sub(r'\{\\[^}]*\}', '', clean_txt) # لابردنی تاگەکانی ASS
         
         if is_song:
-            clean_txt = f'<font color="#FFFF00">{clean_txt}</font>'
+            clean_txt = f'<font color="{SONG_COLOR_SRT}">{clean_txt}</font>'
             
         lines.append(f"{idx}\n{s} --> {e}\n{clean_txt}\n")
     return "\n".join(lines)
@@ -531,10 +501,23 @@ def auto_dl(data: bytes, name: str, mime: str):
     b64 = base64.b64encode(data).decode()
     components.html(f'<a id="xdl" href="data:{mime};base64,{b64}" download="{name}"></a><script>setTimeout(function(){{document.getElementById("xdl").click();}},800);</script>', height=0)
 
+def _cleanup_sub_session():
+    """پاککردنەوەی فایلی کاتی کاتێک ڤیدیۆی نوێ دادەنرێت"""
+    temp_dir = st.session_state.get("sub_temp_dir")
+    if temp_dir and os.path.isdir(temp_dir):
+        try:
+            shutil.rmtree(temp_dir, ignore_errors=True)
+        except Exception:
+            pass
+    st.session_state.sub_raw = None
+    st.session_state.sub_input_path = None
+    st.session_state.sub_temp_dir = None
+
 # ══════════════════════════════════════════════════════════
 #  STREAMLIT UI
 # ══════════════════════════════════════════════════════════
 def main():
+    ensure_streamlit_config()
     st.set_page_config(page_title="Sorani Subtitle Studio", layout="wide")
     st.title("🎬 Kurdish Sorani Subtitle Generator")
 
@@ -543,10 +526,18 @@ def main():
     with tab_sub:
         api_key = st.text_input("🔑 Gemini API Key", type="password")
         video_file = st.file_uploader("📁 ڤیدیۆ بار بکە (MP4/MOV)", type=["mp4", "mov"])
-        
+
         st.markdown("---")
-        audio_mode = st.radio("🎵 جۆری دەنگی ڤیدیۆکە", ["تەنها قسەکردن (ئاسایی)", "قسەکردن و گۆرانی (گۆرانی بە زەرد)"], horizontal=True)
-        is_mixed_audio = "گۆرانی" in audio_mode
+        st.subheader("🎧 جۆری دەنگی ڤیدیۆکە")
+        audio_mode = st.radio(
+            "هەڵبژاردن:",
+            options=["تەنها قسەکردن", "قسەکردن و گۆرانی"],
+            horizontal=True,
+            label_visibility="collapsed",
+            help="ئەگەر ڤیدیۆکە گۆرانی تێدایە، 'قسەکردن و گۆرانی' هەڵبژێرە بۆ ئەوەی گۆرانییەکانیش وەربگێڕێت و ڕەنگیان زەرد بێت."
+        )
+        vad_filter = (audio_mode == "تەنها قسەکردن")
+        songs_mode = (audio_mode == "قسەکردن و گۆرانی")
 
         st.markdown("---")
         font_size = st.slider("📐 قەبارەی فۆنتی ژێرنووس", 20, 80, 52)
@@ -573,75 +564,61 @@ def main():
             wm_pos = st.selectbox("📍 شوێن", ["چەپ", "ڕاست"])
             wm_alignment = 7 if wm_pos == "چەپ" else 9
 
+        st.markdown("---")
+        delay_seconds = st.slider("⏱️ کاتی ژێرنووس (+/- چرکە)", -10.0, 10.0, 0.0, 0.1, help="بۆ پێشخستن یان دواخستنی کاتی ژێرنووسەکان")
+
         if "sub_raw" not in st.session_state:
             st.session_state.sub_raw = None
             st.session_state.sub_input_path = None
             st.session_state.sub_temp_dir = None
 
-        # 🛠️ پێناسەکردنی ئەم فەنکشنە بە فەرمی لێرە بۆ ڕێگریکردن لە هەڵەی پێشتر
-        def _cleanup_sub_session():
-            if st.session_state.sub_temp_dir and os.path.exists(st.session_state.sub_temp_dir):
-                shutil.rmtree(st.session_state.sub_temp_dir, ignore_errors=True)
-            st.session_state.sub_temp_dir   = None
-            st.session_state.sub_input_path = None
-            st.session_state.sub_raw        = None
-            st.session_state.pop("sub_editor_box", None)
-
         st.markdown("---")
-        col_run, col_resume, col_reset = st.columns([2, 2, 1])
-        with col_run:
-            start_clicked = st.button("🧠 ١. دەرهێنان و وەرگێڕان (دەستپێکردن)", type="primary", use_container_width=True)
+        col_start, col_resume = st.columns(2)
+        
+        with col_start:
+            start_clicked = st.button("🧠 ١. دەرهێنان و وەرگێڕان (لە سەرەتاوە)", type="primary", use_container_width=True)
+            
         with col_resume:
-            resume_clicked = st.button("▶️ بەردەوام بوون", use_container_width=True, disabled=not st.session_state.sub_raw)
-        with col_reset:
-            reset_clicked = st.button("🔄 سفر", use_container_width=True, help="ڤیدیۆی بارکراو و وەرگێڕانی هەلگیراو پاک دەکاتەوە")
+            resume_clicked = st.button("▶️ بەردەوام بوون (Resume)", use_container_width=True, disabled=not st.session_state.sub_raw)
 
-        if reset_clicked:
-            _cleanup_sub_session()
-            st.rerun()
-
-        if start_clicked or resume_clicked:
+        if start_clicked:
             if not api_key: st.error("❌ کلیلی Gemini بنووسە."); return
             if not video_file: st.error("❌ ڤیدیۆ بار بکە."); return
             
-            if start_clicked:
-                _cleanup_sub_session()
-                temp_dir = tempfile.mkdtemp()
-                in_p = os.path.join(temp_dir, "input.mp4")
-                with open(in_p, "wb") as f: f.write(video_file.read())
-                st.session_state.sub_temp_dir = temp_dir
-                st.session_state.sub_input_path = in_p
-                existing_raw = ""
-            else:
-                in_p = st.session_state.sub_input_path
-                existing_raw = st.session_state.get("sub_editor_box", st.session_state.sub_raw) or ""
-                if not in_p or not os.path.exists(in_p):
-                    st.error("❌ ڤیدیۆی ئۆریجیناڵ نەماوە — دووبارە بار بکە و وەرگێڕان دەستپێکە.")
-                    return
+            _cleanup_sub_session()
             
-            raw_text = process_full_video(api_key.strip(), in_p, is_mixed_audio, existing_raw)
+            temp_dir = tempfile.mkdtemp()
+            in_p = os.path.join(temp_dir, "input.mp4")
+            with open(in_p, "wb") as f: f.write(video_file.read())
+            
+            st.session_state.sub_temp_dir = temp_dir
+            st.session_state.sub_input_path = in_p
+            
+            raw_text = process_full_video(api_key.strip(), in_p, vad_filter=vad_filter, songs_mode=songs_mode, existing_raw="")
+            if raw_text:
+                st.session_state.sub_raw = raw_text
+                st.rerun()
+
+        if resume_clicked:
+            if not api_key: st.error("❌ کلیلی Gemini بنووسە."); return
+            if not st.session_state.sub_input_path or not os.path.exists(st.session_state.sub_input_path):
+                st.error("❌ ڤیدیۆی پێشوو نەدۆزرایەوە، تکایە لە سەرەتاوە دەست پێ بکەوە.")
+                return
+                
+            in_p = st.session_state.sub_input_path
+            # وەرگرتنی دەقە دەستکاری کراوەکە لە تێکست ئاریاکە ئەگەر هەبێت
+            existing_raw = st.session_state.get("edited_raw_text", st.session_state.sub_raw)
+            
+            raw_text = process_full_video(api_key.strip(), in_p, vad_filter=vad_filter, songs_mode=songs_mode, existing_raw=existing_raw)
             if raw_text:
                 st.session_state.sub_raw = raw_text
                 st.rerun()
 
         if st.session_state.sub_raw:
-            st.success("✅ وەرگێڕان تەواو بوو! دەتوانیت پێداچوونەوەی بۆ بکەیت.")
+            st.success("✅ وەرگێڕان ئامادەیە! دەتوانیت پێداچوونەوەی بۆ بکەیت.")
             
-            st.markdown("### ⏰ ڕێکخستنی کاتی ژێرنووس (Subtitle Delay)")
-            st.caption("ئەگەر نووسینەکە پێش دەنگ دەرکەوتووە، کاتەکە زیاد بکە (نموونە 1.5). ئەگەر درەنگ دەرکەوتووە، کەم بکەرەوە (نموونە -1.0).")
-            
-            col_delay_val, col_delay_btn = st.columns([2, 1])
-            with col_delay_val:
-                delay_val = st.number_input("⏱️ بڕی دواخستن یان پێشخستن (بە چرکە)", min_value=-30.0, max_value=30.0, value=0.0, step=0.5, format="%.1f", key="delay_val_input")
-            with col_delay_btn:
-                st.write("")
-                apply_delay = st.button("🔄 گۆڕینی کاتەکان", use_container_width=True)
-                
-            if apply_delay and delay_val != 0.0:
-                st.session_state.sub_raw = shift_transcript(st.session_state.sub_raw, delay_val)
-                st.rerun()
-
-            edited_raw = st.text_area("📝 ستەرەکان — پێش لکاندن دەسکاریان بکە", value=st.session_state.sub_raw, height=400, key="sub_editor_box")
+            display_raw = shift_transcript(st.session_state.sub_raw, delay_seconds)
+            edited_raw = st.text_area("📝 ستەرەکان — پێش لکاندن دەسکاریان بکە", value=display_raw, height=400, key="edited_raw_text")
 
             if st.button("🔥 ٢. ژێرنووس بخەرە سەر ڤیدیۆ", type="primary", use_container_width=True):
                 cues = parse_raw_text(edited_raw)
@@ -666,7 +643,7 @@ def main():
                         "start": float_to_ass_time(current_intro_time), 
                         "end": float_to_ass_time(end_time), 
                         "alignment_tag": "{\\an2}", 
-                        "text": f"وەرگێڕان\\N{translator_name}"
+                        "text": f"{{\\c&H0000FF00&}}وەرگێڕان\\N{translator_name}" # سەوز
                     })
                     current_intro_time = end_time
                     
@@ -676,7 +653,7 @@ def main():
                         "start": float_to_ass_time(current_intro_time), 
                         "end": float_to_ass_time(end_time), 
                         "alignment_tag": "{\\an2}", 
-                        "text": f"تەکنیک\\N{tech_name}"
+                        "text": f"{{\\c&H00FFFF00&}}تەکنیک\\N{tech_name}" # شین
                     })
                     current_intro_time = end_time
 
