@@ -58,6 +58,20 @@ def find_kurdish_font():
             pass
     return "Arial"
 
+def get_base64_bg_img():
+    """گەڕان بەدوای فۆرمی جیاوازی وێنەی باکگراوند لە بوخچەی پڕۆژەکەدا"""
+    bg_files = ["bg.png", "bg.jpg", "bg.jpeg", "bg.webp"]
+    for f in bg_files:
+        p = os.path.join(APP_DIR, f)
+        if os.path.exists(p):
+            try:
+                with open(p, "rb") as image_file:
+                    encoded_string = base64.b64encode(image_file.read()).decode()
+                return f"data:image/png;base64,{encoded_string}"
+            except Exception:
+                pass
+    return ""
+
 def sec_to_ass(t: float) -> str:
     h = int(t // 3600)
     m = int((t % 3600) // 60)
@@ -171,15 +185,15 @@ def validate_cues(cues):
 # ══════════════════════════════════════════════════════════
 #  GEMINI TRANSLATION (Extremely Deep & Strict Rules)
 # ══════════════════════════════════════════════════════════
-def gemini_translate(api_keys, current_key_index, transcript_chunk, songs_mode=False):
+def gemini_translate(api_keys, current_key_index, transcript_chunk, songs_mode=False, thinking_budget=2048):
     system_prompt = """
 تۆ گەورەترین، لێهاتووترین و شاعیرانەترین وەرگێڕ و ڕێنووسنووسی دیالۆگی فیلم و گۆرانی سینەماییت لە زمانی کوردی سۆرانی پاتیدا. ئەرکەکەت وەرگێڕانی ئەم ژێرنووسەیە بە زمانێکی یەکجار بەهێز.
 
 یاساکانی مێشکت (زۆر توند، قووڵ، و نەگۆڕ):
 ١. وەرگێڕانی قووڵ و مانی (Deep Contextual Translation): بە هیچ شێوەیەک وەرگێڕانی پیت بە پیت یان حەرفی مەکە! مانا و مەبەستی ڕاستەقینەی قسەکەرەکە بە زمانی کوردییەکی زۆر پاراو، سادە، نەرم، و پڕ لە هەست و سۆز بنووسەوە کە کاتێک بینەری کورد سەیری دەکات، هەست بکات قسەی زگماکی کارەکتەرەکەیە.
 ٢. پاراستنی کاتەکان (Exact Timestamps): کلیلەکانی "start" و "end" نابێت بە هیچ هۆکارێک بە تەنانەت 0.001 چرکەش بگۆڕدرێن. کاتەکان موو ناکەن و دەبێت وەک خۆیان لەناو کۆدی JSON بنووسرێنەوە.
-٣. یاسای هاوتایی و نەپەڕاندنی دێڕەکان: دەبێت هەموو دێڕەکان بە بێ جیاوازی دێڕ بە دێڕ وەربگێڕدرێن. ژمارەی دێڕەکان لە وەڵامدا دەبێت بە تەواوی هاوتای ژمارەی دێڕەکانی ناوچەک بێت. نابێت هیچ شتێک کورت بکرێتەوە یان لاببرێت.
-٤. قەدەغەکردنی تەواوی خاڵبەندییەکان: لە زمانی کوردییە وەرگێڕدراوەکەدا بە هیچ شێوەیەک نیشانەکانی (؟ . : ! ، ، " ' - _ ؟) بەکارمەهێنە. دەقەکە بە تەواوی پاک بنووسەوە.
+٣. یاسای هاوتایی و نەپەڕاندنی دێڕەکان: دەبێت هەموو دێڕەکان بە بێ جیاوازی دێڕ بە دێڕ وەربگێڕدرێن. ژمارەی دێڕەکان لە وەڵامدا دەبێت بە تەواوی هاوتای ژمارەی ڕستەکانی ناوچەک بێت.
+٤. قەدەغەکردنی تەواوی خاڵبەندییەکان: لە دەقی وەرگێڕدراوی کوردی بە هیچ شێوەیەک هێمای خاڵبەندی وەک (؟ . : ! ، ، " ' - _ ? !) بەکارمەهێنه.
 ٥. فۆرماتی دروستی JSON: تەنها و تەنها پێکهاتەی یاسایی و خاوێنی JSON بنووسەوە بەبێ هیچ پێشەکییەک، ڕوونکردنەوەیەک، یان دەقی زیادە لە دەرەوەی کەوانەکان.
 """
     if songs_mode:
@@ -203,18 +217,42 @@ Output format (ALWAYS return a JSON array of the EXACT SAME LENGTH as input):
             current_api_key = api_keys[current_key_index]
             client = genai.Client(api_key=current_api_key)
             
-            resp = client.models.generate_content(
-                model="gemini-3.5-flash",
-                contents=[user_prompt],
-                config=types.GenerateContentConfig(
+            # نیشاندانی زانیاری کارکردن لەسەر بنەمای هەڵبژاردنی بەکارهێنەر
+            if thinking_budget == 0:
+                status_msg.info(f"⚡ خەریکی وەرگێڕانی یەکجار خێران بە کلیلی ژمارە {current_key_index + 1}... (ڕاستەوخۆ دەنووسێت)")
+                config_params = dict(
+                    system_instruction=system_prompt, 
+                    temperature=0.70,  
+                    max_output_tokens=65536,
+                    response_mime_type="application/json"
+                )
+            elif thinking_budget == 2048:
+                status_msg.info(f"⚖️ خەریکی وەرگێڕانی هاوسەنگ و ستانداردین بە کلیلی ژمارە {current_key_index + 1}... (هاوسەنگی نێوان خێرایی و وردی)")
+                config_params = dict(
                     system_instruction=system_prompt, 
                     temperature=0.70,  
                     max_output_tokens=65536,
                     response_mime_type="application/json",
                     thinking_config=types.ThinkingConfig(
-                        thinking_budget=-1  
+                        thinking_budget=2048  # بەکارهێنانی بودجەی ستاندارد [1]
                     )
                 )
+            else:
+                status_msg.info(f"🧠 خەریکی وەرگێڕانی زۆر قووڵ و چڕین بە کلیلی ژمارە {current_key_index + 1}... (کەمێک هێواشترە)")
+                config_params = dict(
+                    system_instruction=system_prompt, 
+                    temperature=0.70,  
+                    max_output_tokens=65536,
+                    response_mime_type="application/json",
+                    thinking_config=types.ThinkingConfig(
+                        thinking_budget=-1  # بەکارهێنانی زۆرترین بودجە [1]
+                    )
+                )
+            
+            resp = client.models.generate_content(
+                model="gemini-3.5-flash",
+                contents=[user_prompt],
+                config=types.GenerateContentConfig(**config_params)
             )
             data = extract_json(resp.text)
             status_msg.empty()
@@ -232,7 +270,7 @@ Output format (ALWAYS return a JSON array of the EXACT SAME LENGTH as input):
                     status_msg.warning(f"⚠️ کلیلەکە ماندوو بوو! ڕاستەوخۆ گۆڕدرا بۆ کلیلی ژمارە {current_key_index + 1}...")
                     time.sleep(2)
             else:
-                status_msg.info("خەریکی وەرگرتنی وەڵامە...")
+                status_msg.info("⏳ سێرڤەر خەریکە وەڵام دەداتەوە...")
                 time.sleep(2)
 
 # ══════════════════════════════════════════════════════════
@@ -298,7 +336,7 @@ def build_translation_chunks(cues, chunk_minutes):
 # ══════════════════════════════════════════════════════════
 #  ORCHESTRATOR
 # ══════════════════════════════════════════════════════════
-def process_full_video(api_keys, video_path, vad_filter=True, songs_mode=False, existing_raw="", chunk_minutes=5):
+def process_full_video(api_keys, video_path, vad_filter=True, songs_mode=False, existing_raw="", chunk_minutes=5, thinking_budget=2048):
     audio_path = video_path.replace(".mp4", ".wav")
     last_translated_sec = parse_existing_raw_to_last_time(existing_raw)
     
@@ -311,33 +349,47 @@ def process_full_video(api_keys, video_path, vad_filter=True, songs_mode=False, 
             st.error("❌ هیچ دیالۆگێک لە ڤیدیۆکەدا نەدۆزرایەوە.")
             return existing_raw
             
-    with st.spinner("🧠 خەریکی وەرگێڕانە بە خێرایی موشەک..."):
-        chunks = build_translation_chunks(cues, chunk_minutes=chunk_minutes)
-        all_cues = []
-        if existing_raw: all_cues.extend(parse_raw_text(existing_raw))
+    # زیادکردنی سیستەمی ڕێژەی سەدی و پیشاندانی خولەکەکان
+    status_header = st.empty()
+    percent_bar = st.progress(0)
+    percent_text = st.empty()
+
+    chunks = build_translation_chunks(cues, chunk_minutes=chunk_minutes)
+    all_cues = []
+    if existing_raw: all_cues.extend(parse_raw_text(existing_raw))
+        
+    total = len(chunks)
+    current_key_index = 0
+    
+    for index, chunk in enumerate(chunks):
+        chunk_last_end = chunk[-1]["end"] if chunk else 0.0
+        
+        # لێکدانەوەی ڕێژەی سەدی بۆ ئەم پارچەیە
+        pct = int(((index) / total) * 100)
+        percent_bar.progress((index) / total)
+        percent_text.markdown(f"**لەسەدا {pct}٪ ی ڤیدیۆکە تەواو بووە...**")
+        
+        if chunk_last_end <= last_translated_sec:
+            continue
             
-        total = len(chunks)
-        progress = st.progress(0)
-        current_key_index = 0
-        
-        for index, chunk in enumerate(chunks):
-            chunk_last_end = chunk[-1]["end"] if chunk else 0.0
-            if chunk_last_end <= last_translated_sec:
-                progress.progress((index + 1) / total)
-                continue
-                
-            active_items = [c for c in chunk if c["start"] >= last_translated_sec]
-            if not active_items:
-                progress.progress((index + 1) / total)
-                continue
-                
-            translated, current_key_index = gemini_translate(api_keys, current_key_index, active_items, songs_mode=songs_mode)
-            all_cues.extend(translated)
-            progress.progress((index + 1) / total)
-                
-        all_cues.sort(key=lambda x: x["start"])
-        validated = validate_cues(all_cues)
-        
+        active_items = [c for c in chunk if c["start"] >= last_translated_sec]
+        if not active_items:
+            continue
+            
+        # نیشاندانی خولەکی دەستپێک و کۆتایی ئەم پارچەیە
+        start_min = int(active_items[0]["start"] // 60)
+        end_min = int(active_items[-1]["end"] // 60)
+        status_header.warning(f"🔄 خەریکی وەرگێڕانی خولەکی **{start_min}** تا **{end_min}**... (پارچەی {index + 1} لە {total})")
+            
+        # ڕەوانەکردنی فایلی وەرگێڕان بە فلتەری بیرکردنەوەی هەڵبژێردراوەوە
+        translated, current_key_index = gemini_translate(api_keys, current_key_index, active_items, songs_mode=songs_mode, thinking_budget=thinking_budget)
+        all_cues.extend(translated)
+            
+    # کۆتایی هاتن
+    percent_bar.progress(1.0)
+    percent_text.success("🎉 لەسەدا 100٪ تەواو بوو!")
+    status_header.empty()
+    
     raw_lines = []
     for c in validated:
         s = float_to_ass_time(c["start"])
@@ -410,29 +462,39 @@ def main():
     ensure_streamlit_config()
     st.set_page_config(page_title="Sorani Subtitle Studio", layout="wide")
     
-    # 🎨 ئینجێکتکردنی ئاڵای کوردستان بە ماسکێکی تاریکی شیک بۆ خوێندنەوەی دەقەکان
-    # لێرەدا بە دروستی و بەبێ هیچ هەڵەیەک دێڕی داهاتوو دەنووسین
-    st.markdown(
-        """
+    bg_data = get_base64_bg_img()
+    if bg_data:
+        bg_style = f"""
         <style>
-        [data-testid="stAppViewContainer"] {
-            background-image: linear-gradient(rgba(18, 18, 18, 0.88), rgba(18, 18, 18, 0.88)), url("https://upload.wikimedia.org/wikipedia/commons/thumb/3/35/Flag_of_Kurdistan.svg/1280px-Flag_of_Kurdistan.svg.png");
+        [data-testid="stAppViewContainer"] {{
+            background-image: linear-gradient(rgba(18, 18, 18, 0.88), rgba(18, 18, 18, 0.88)), url("{bg_data}");
             background-size: cover;
             background-position: center;
             background-attachment: fixed;
+        }}
+        [data-testid="stHeader"] {{
+            background-color: rgba(0,0,0,0) !important;
+        }}
+        </style>
+        """
+    else:
+        bg_style = """
+        <style>
+        [data-testid="stAppViewContainer"] {
+            background-color: #121212 !important;
         }
         [data-testid="stHeader"] {
             background-color: rgba(0,0,0,0) !important;
         }
         </style>
-        """,
-        unsafe_allow_html=True
-    )
+        """
+        
+    st.markdown(bg_style, unsafe_allow_html=True)
     
     st.title("🎬 Kurdish Sorani Subtitle Generator")
 
     st.subheader("🔑 کلیلەکانی Gemini")
-    st.info("💡 دەتوانیت تا ٤ کلیلی جیاواز دابنێیت. بەرنامەکە تەنها کلیلی یەکەم بەکاردەهێنێت تا لیمیتی نامێنێت، پاشان خۆکارانە دەچێتە سەر کلیلی دووەم!")
+    st.info("💡 دەتوانیت تا ٤ کلیلی جیاواز دابنێیت. بەرنامەکە تەنها کلیلی یەکەم بەکاردەهێنێت تا لیمیتی تەواو دەبێت، پاشان خۆکارانە دەچێتە سەر کلیلی دووەم!")
     
     kc1, kc2 = st.columns(2)
     with kc1:
@@ -447,6 +509,32 @@ def main():
     video_file = st.file_uploader("📁 ڤیدیۆ بار بکە (MP4/MOV)", type=["mp4", "mov"])
 
     st.markdown("---")
+    
+    # ⚡ زیادکردنی دوگمەی شێوازی کارکردنی جیاواز بەدەستی بەکارهێنەر
+    st.subheader("⚡ شێوازی بیرکردنەوەی زیرەکی دەستکرد")
+    speed_mode = st.radio(
+        "ئاستی بیرکردنەوە و خێرایی هەڵبژێڕە:", 
+        [
+            "⚡ یەکجار خێرا (بەبێ بیرکردنەوە - وەرگێڕانی خێرا لە چەند چرکەیەکدا)", 
+            "⚖️ ستاندارد و هاوسەنگ (وەرگێڕانی خێرا بە مانا و پاراستنی فۆرمات)",
+            "🧠 زۆر قووڵ و ورد (وەرگێڕانی قووڵ بەڵام هێواشترە)"
+        ], 
+        horizontal=True,
+        label_visibility="collapsed"
+    )
+    
+    # لێکدانەوەی ڕێکخستنی کلیل لەسەر بنەمای هەڵبژاردنەکە
+    if "⚡ یەکجار خێرا" in speed_mode:
+        use_thinking = False
+        thinking_budget = 0
+    elif "⚖️ ستاندارد" in speed_mode:
+        use_thinking = True
+        thinking_budget = 2048  # بیرکردنەوەی ستاندارد بە لیمیتی گونجاو [1]
+    else:
+        use_thinking = True
+        thinking_budget = -1    # زۆرترین بیرکردنەوەی قووڵ [1]
+
+    st.markdown("---")
     c_audio, c_chunk = st.columns(2)
     with c_audio:
         st.subheader("🎧 جۆری دەنگی ڤیدیۆکە")
@@ -455,7 +543,11 @@ def main():
         songs_mode = (audio_mode == "قسەکردن و گۆرانی")
     with c_chunk:
         st.subheader("⚙️ بڕی وەرگێڕان بە یەکجار")
-        chunk_minutes = st.slider("چەند خولەک بەیەکجار بنێرێت؟", 3, 15, 6, help="ئەگەر ڤیدیۆکە قسەی زۆرە بیخەرە سەر ٥، ئەگەر کەمە بیخەرە سەر ١٠")
+        chunk_minutes = st.slider(
+            "چەند خولەک بەیەکجار بنێرێت؟", 
+            3, 15, 4, 
+            help="پێشنیار دەکەم بیخەیتە سەر ٣ یان ٤ خولەک ئەگەر دەتەوێت پرۆسەکە زۆر خێرا بێت."
+        )
 
     st.markdown("---")
     font_size = st.slider("📐 قەبارەی فۆنتی ژێرنووس", 20, 80, 52)
@@ -511,7 +603,8 @@ def main():
         st.session_state.sub_temp_dir = temp_dir
         st.session_state.sub_input_path = in_p
         
-        raw_text = process_full_video(api_keys, in_p, vad_filter=vad_filter, songs_mode=songs_mode, existing_raw="", chunk_minutes=chunk_minutes)
+        # ڕەوانەکردنی هێزی بیرکردنەوە بە داینامیکی
+        raw_text = process_full_video(api_keys, in_p, vad_filter=vad_filter, songs_mode=songs_mode, existing_raw="", chunk_minutes=chunk_minutes, thinking_budget=thinking_budget)
         if raw_text:
             st.session_state.sub_raw = raw_text
             st.rerun()
@@ -525,7 +618,7 @@ def main():
         in_p = st.session_state.sub_input_path
         existing_raw = st.session_state.get("edited_raw_text", st.session_state.sub_raw)
         
-        raw_text = process_full_video(api_keys, in_p, vad_filter=vad_filter, songs_mode=songs_mode, existing_raw=existing_raw, chunk_minutes=chunk_minutes)
+        raw_text = process_full_video(api_keys, in_p, vad_filter=vad_filter, songs_mode=songs_mode, existing_raw=existing_raw, chunk_minutes=chunk_minutes, thinking_budget=thinking_budget)
         if raw_text:
             st.session_state.sub_raw = raw_text
             st.rerun()
@@ -575,7 +668,7 @@ def main():
             with open(ass_p, "w", encoding="utf-8") as f: f.write(ass_txt)
             with open(srt_p, "w", encoding="utf-8") as f: f.write(srt_txt)
 
-            with st.spinner("🔥 خەریکی لکاندنی ژێرنووسە بە ڤیدیۆکەوە (FFmpeg)..."):
+            with st.spinner("🔥 khەریکی لکاندنی ژێرنووسە بە ڤیدیۆکەوە (FFmpeg)..."):
                 try: burn_subtitles(in_p, ass_p, out_p)
                 except Exception as e: st.error(f"❌ هەڵە لە FFmpeg:\n`{e}`"); return
 
