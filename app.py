@@ -172,7 +172,6 @@ def validate_cues(cues):
 #  GEMINI TRANSLATION (Extremely Deep & Strict Rules)
 # ══════════════════════════════════════════════════════════
 def gemini_translate(api_keys, current_key_index, transcript_chunk, songs_mode=False):
-    # مێشکی مۆدێلەکە زۆر بە قووڵی و چڕی داڕێژراوەتەوە بۆ بەرزترین کوالیتی
     system_prompt = """
 تۆ گەورەترین، لێهاتووترین و شاعیرانەترین وەرگێڕ و ڕێنووسنووسی دیالۆگی فیلم و گۆرانی سینەماییت لە زمانی کوردی سۆرانی پاتیدا. ئەرکەکەت وەرگێڕانی ئەم ژێرنووسەیە بە زمانێکی یەکجار بەهێز.
 
@@ -412,6 +411,7 @@ def main():
     st.set_page_config(page_title="Sorani Subtitle Studio", layout="wide")
     
     # 🎨 ئینجێکتکردنی ئاڵای کوردستان بە ماسکێکی تاریکی شیک بۆ خوێندنەوەی دەقەکان
+    # لێرەدا بە دروستی و بەبێ هیچ هەڵەیەک دێڕی داهاتوو دەنووسین
     st.markdown(
         """
         <style>
@@ -426,7 +426,7 @@ def main():
         }
         </style>
         """,
-        unsafe_allow_code_with_html=True
+        unsafe_allow_html=True
     )
     
     st.title("🎬 Kurdish Sorani Subtitle Generator")
