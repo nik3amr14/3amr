@@ -180,14 +180,13 @@ def validate_cues(cues):
 #  GEMINI TRANSLATION (Dynamic Thinking & Poetic Meaning)
 # ══════════════════════════════════════════════════════════
 def gemini_translate(api_keys, current_key_index, transcript_chunk, songs_mode=False):
-    # یاساکان زۆر توندتر کراون بۆ ئەوەی گەرمی 0.70 کێشە لە شێوازی فۆرمات دروست نەکات
     system_prompt = """
 تۆ باشترین، شاعیرانەترین و لێهاتووترین وەرگێڕی دیالۆگی فیلم و گۆرانی سینەماییت لە کوردستان. ئەرکەکەت وەرگێڕانی ئەم ژێرنووسەیە بۆ کوردی سۆرانییەکی زۆر پاراو و هەستیار.
 
-یاساکانی مێشکت (زۆر توند و بێ هیچ جێگرەوەیەک):
+یاساکانی مێشکت (زۆر توند):
 ١. مانا و سۆز (Poetic & Natural Context): بە هیچ شێوەیەک وەرگێڕانی وشە بە وشە مەکە! مانای تەواو و هەستی ڕاستەقینەی دیالۆگەکان بگرە و بیانکە بە کوردییەکی زۆر جوان، نەرم، شاعیرانە و پڕ لە هەست.
 ٢. دەستکاریکردنی کاتەکان بە توندی قەدەغەیە: کلیلەکانی "start" و "end" دەبێت بە دروستی و بەبێ یەک چرکە دەستکاری وەک خۆیان لەناو کۆدی JSON بنووسرێنەوە.
-٣. نەپەڕاندنی دێڕەکان: دەبێت سەرجەم دێڕەکانی ناو لیستەکە دێڕ بە دێڕ وەربگێڕیت. ژمارەی ڕستەکان لە وەڵامی کۆتاییدا دەبێت بە تەواوی هاوتای ڕستەکانی ناوچەک بێت (بێ کورتکردنەوە یان لادان).
+٣. نەپەڕاندنی دێڕەکان: دەبێت سەرجەم دێڕەکانی ناو لیستەکە دێڕ بە دێڕ وەربگێڕیت. ژمارەی ڕستەکان لە وەڵامی کۆتاییدا دەبێت بە تەواوی هاوتای ڕستەکانی ناوچەک بێت.
 ٤. قەدەغەکردنی تەواوی خاڵبەندییەکان: لە دەقی وەرگێڕدراوی کوردی بە هیچ شێوەیەک هێمای خاڵبەندی وەک (؟ . : ! ، ، " ' - _ ? !) بەکارمەهێنه.
 ٥. فۆرماتی کۆد: تەنها و تەنها پێکهاتەی ڕاست و دروستی JSON دەربکە، هیچ نووسین و ڕوونکردنەوەیەکی تر لە دەرەوەی کەوانەکان مەنووسە.
 """
@@ -218,12 +217,12 @@ Output format (ALWAYS return a JSON array of the EXACT SAME LENGTH as input):
                 contents=[user_prompt],
                 config=types.GenerateContentConfig(
                     system_instruction=system_prompt, 
-                    temperature=0.70,  # گەرمی بۆ وەرگێڕانێکی سروشتی و هەستیار
+                    temperature=0.70,  
                     max_output_tokens=65536,
                     response_mime_type="application/json",
-                    # بەکارهێنانی سیستەمی بیرکردنەوەی قووڵی داینامیکی گووگڵ بۆ بەرزکردنەوەی کوالیتی
+                    # بەکارهێنانی بیرکردنەوەی قووڵ
                     thinking_config=types.ThinkingConfig(
-                        thinking_budget=-1  # بەکارهێنانی داینامیکی لیمیتی بیرکردنەوە
+                        thinking_budget=-1  
                     )
                 )
             )
@@ -234,7 +233,6 @@ Output format (ALWAYS return a JSON array of the EXACT SAME LENGTH as input):
         except Exception as e:
             error_msg = str(e)
             if "429" in error_msg or "RESOURCE_EXHAUSTED" in error_msg or "Quota" in error_msg:
-                # کلیلەکە هێزی نەما، دەچێتە سەر کلیلی داهاتوو
                 next_index = (current_key_index + 1) % len(api_keys)
                 if next_index == current_key_index:
                     status_msg.error("❌ هەموو کلیلەکان لیمیتیان تەواو بووە! تکایە کەمێک پشوو بدە یان کلیلی نوێ دابنێ.")
@@ -242,7 +240,7 @@ Output format (ALWAYS return a JSON array of the EXACT SAME LENGTH as input):
                 else:
                     current_key_index = next_index
                     status_msg.warning(f"⚠️ کلیلەکە ماندوو بوو! ڕاستەوخۆ گۆڕدرا بۆ کلیلی ژمارە {current_key_index + 1}...")
-                    time.sleep(2) # پشوویەکی بچووک بۆ گۆڕینی کلیل
+                    time.sleep(2)
             else:
                 status_msg.info("خەریکی وەرگرتنی وەڵامە...")
                 time.sleep(2)
@@ -268,7 +266,6 @@ def transcribe_audio(audio_path, vad_filter=True):
     current_text, start_time, last_end = [], None, None
     
     for seg in segments:
-        # چارەسەری کێشەی وەستان لە کاتی شەڕ و مۆسیقا (Fallback)
         if not seg.words:
             if seg.text and seg.text.strip():
                 cues.append({"start": round(float(seg.start), 2), "end": round(float(seg.end), 2), "text": seg.text.strip()})
@@ -344,7 +341,6 @@ def process_full_video(api_keys, video_path, vad_filter=True, songs_mode=False, 
                 progress.progress((index + 1) / total)
                 continue
                 
-            # ناردن بۆ وەرگێڕان بەبێ پشوودانی زۆرەملێ لە نێوان پارچەکاندا
             translated, current_key_index = gemini_translate(api_keys, current_key_index, active_items, songs_mode=songs_mode)
             all_cues.extend(translated)
             progress.progress((index + 1) / total)
@@ -432,7 +428,8 @@ def main():
 
     with tab_sub:
         st.info("💡 دەتوانیت چەند کلیلێک لەسەر یەک دابنێیت. بەرنامەکە تەنها یەکەم کلیل بەکاردەهێنێت تا لیمیتی تەواو دەبێت، پاشان خۆکارانە دەچێتە سەر کلیلی دووەم!")
-        api_keys_input = st.text_area("🔑 کلیلەکانی Gemini لێرە دابنێ (هەر کلیلەی لە دێڕێکدا)", type="password", height=100)
+        # لابردنی type="password" لەم دێڕەی خوارەوە بۆ چاککردنی هەڵەکە
+        api_keys_input = st.text_area("🔑 کلیلەکانی Gemini لێرە دابنێ (هەر کلیلەی لە دێڕێکدا)", height=100)
         video_file = st.file_uploader("📁 ڤیدیۆ بار بکە (MP4/MOV)", type=["mp4", "mov"])
 
         st.markdown("---")
