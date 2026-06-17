@@ -185,14 +185,14 @@ def validate_cues(cues):
 # ══════════════════════════════════════════════════════════
 #  GEMINI TRANSLATION (Extremely Deep & Strict Rules)
 # ══════════════════════════════════════════════════════════
-def gemini_translate(api_keys, current_key_index, transcript_chunk, songs_mode=False, thinking_budget=2048):
+def gemini_translate(api_keys, current_key_index, transcript_chunk, songs_mode=False, thinking_budget=2048, selected_model="gemini-2.5-flash"):
     system_prompt = """
 تۆ گەورەترین، لێهاتووترین و شاعیرانەترین وەرگێڕ و ڕێنووسنووسی دیالۆگی فیلم و گۆرانی سینەماییت لە زمانی کوردی سۆرانی پاتیدا. ئەرکەکەت وەرگێڕانی ئەم ژێرنووسەیە بە زمانێکی یەکجار بەهێز.
 
 یاساکانی مێشکت (زۆر توند، قووڵ، و نەگۆڕ):
 ١. وەرگێڕانی قووڵ و مانی (Deep Contextual Translation): بە هیچ شێوەیەک وەرگێڕانی پیت بە پیت یان حەرفی مەکە! مانا و مەبەستی ڕاستەقینەی قسەکەرەکە بە زمانی کوردییەکی زۆر پاراو، سادە، نەرم، و پڕ لە هەست و سۆز بنووسەوە کە کاتێک بینەری کورد سەیری دەکات، هەست بکات قسەی زگماکی کارەکتەرەکەیە.
 ٢. پاراستنی کاتەکان (Exact Timestamps): کلیلەکانی "start" و "end" نابێت بە هیچ هۆکارێک بە تەنانەت 0.001 چرکەش بگۆڕدرێن. کاتەکان موو ناکەن و دەبێت وەک خۆیان لەناو کۆدی JSON بنووسرێنەوە.
-٣. یاسای هاوتایی و نەپەڕاندنی دێڕەکان: دەبێت هەموو دێڕەکان بە بێ جیاوازی دێڕ بە دێڕ وەربگێڕدرێن. ژمارەی دێڕەکان لە وەڵامدا دەبێت بە تەواوی هاوتای ژمارەی ڕستەکانی ناوچەک بێت.
+٣. یاسای هاوتایی و نەپەڕاندنی دێڕەکان: دەبێت هەموو دێڕەکان بە بێ جیاوازی دێڕ بە دێڕ وەربگێڕدرێن. ژمارەی دێڕەکان لە وەڵامدا دەبێت بە تەواوی هاوتای ڕستەکانی ناوچەک بێت.
 ٤. قەدەغەکردنی تەواوی خاڵبەندییەکان: لە دەقی وەرگێڕدراوی کوردی بە هیچ شێوەیەک هێمای خاڵبەندی وەک (؟ . : ! ، ، " ' - _ ? !) بەکارمەهێنه.
 ٥. فۆرماتی دروستی JSON: تەنها و تەنها پێکهاتەی یاسایی و خاوێنی JSON بنووسەوە بەبێ هیچ پێشەکییەک، ڕوونکردنەوەیەک، یان دەقی زیادە لە دەرەوەی کەوانەکان.
 """
@@ -214,8 +214,14 @@ Output format (ALWAYS return a JSON array of the EXACT SAME LENGTH as input):
     
     max_attempts = len(api_keys) * 3
     attempt = 0
-    last_error = None
     
+    # دروستکردنی زنجیرەی مۆدێلی یەدەگ لەسەر بنەمای هەڵبژاردنی سەرەکی بەکارهێنەر [1, 2]
+    models_to_try = [selected_model]
+    fallback_pool = ["gemini-3.5-flash", "gemini-2.5-flash", "gemini-1.5-flash", "gemini-1.5-pro"]
+    for m in fallback_pool:
+        if m not in models_to_try:
+            models_to_try.append(m)
+            
     while attempt < max_attempts:
         try:
             current_api_key = api_keys[current_key_index]
@@ -253,37 +259,44 @@ Output format (ALWAYS return a JSON array of the EXACT SAME LENGTH as input):
                     )
                 )
             
-            resp = client.models.generate_content(
-                model="gemini-3.5-flash",
-                contents=[user_prompt],
-                config=types.GenerateContentConfig(**config_params)
-            )
+            # لۆجیکی خۆکار بۆ سووڕانەوە بەناو مۆدێلەکاندا ئەگەر یەکێکیان قەرەباڵغ بوو [1, 2]
+            resp = None
+            for m_name in models_to_try:
+                try:
+                    resp = client.models.generate_content(
+                        model=m_name,
+                        contents=[user_prompt],
+                        config=types.GenerateContentConfig(**config_params)
+                    )
+                    break 
+                except Exception as model_err:
+                    err_str = str(model_err)
+                    if "503" in err_str or "UNAVAILABLE" in err_str or "demand" in err_str.lower():
+                        continue
+                    else:
+                        raise model_err
             
-            # تاقیکردنەوەی خوێندنەوەی JSON
-            try:
-                data = extract_json(resp.text)
-                status_msg.empty()
-                if data: return data, current_key_index
-            except Exception:
-                raise ValueError(f"Gemini returned an empty/invalid JSON list.")
+            if resp is None:
+                raise ValueError("تەواوی مۆدێلەکان لەم ساتەدا بەردەست نین.")
+                
+            data = extract_json(resp.text)
+            status_msg.empty()
+            if data: return data, current_key_index
             
         except Exception as e:
-            last_error = str(e)
-            attempt += 1
-            
-            if "429" in last_error or "RESOURCE_EXHAUSTED" in last_error or "Quota" in last_error:
+            error_msg = str(e)
+            if "429" in error_msg or "RESOURCE_EXHAUSTED" in error_msg or "Quota" in error_msg:
                 current_key_index = (current_key_index + 1) % len(api_keys)
                 status_msg.warning(f"⚠️ کلیلەکە ماندوو بوو! گۆڕدرا بۆ کلیلی ژمارە {current_key_index + 1}...")
                 time.sleep(3)
-            elif "API_KEY" in last_error.upper() or "401" in last_error or "403" in last_error:
-                status_msg.error(f"❌ کلیلەکە (API Key) کێشەی هەیە یان کار ناکات! هەڵە: {last_error}")
-                return [], current_key_index
             else:
-                status_msg.warning(f"⚠️ هەڵەیەک ڕوویدا (هەوڵی {attempt}/{max_attempts}):\n`{last_error}`")
-                time.sleep(2)
-                
-    status_msg.error(f"❌ نەتوانرا وەرگێڕانەکە بکرێت دوای چەندین هەوڵ.\nکۆتا هەڵە:\n`{last_error}`")
-    return [], current_key_index
+                if "503" in error_msg or "UNAVAILABLE" in error_msg:
+                    status_msg.warning(f"⚠️ هەڵەی گووگڵ 503 (قەرەباڵغی سێرڤەر). خەریکە دووبارە تاقیدەکەینەوە... (هەوڵی {attempt+1})")
+                    time.sleep(4)
+                else:
+                    status_msg.info("⏳ سێرڤەر خەریکە وەڵام دەداتەوە...")
+                    time.sleep(2)
+            attempt += 1
 
 # ══════════════════════════════════════════════════════════
 #  FASTER WHISPER (Fallback Fix)
@@ -348,7 +361,7 @@ def build_translation_chunks(cues, chunk_minutes):
 # ══════════════════════════════════════════════════════════
 #  ORCHESTRATOR
 # ══════════════════════════════════════════════════════════
-def process_full_video(api_keys, video_path, vad_filter=True, songs_mode=False, existing_raw="", chunk_minutes=5, thinking_budget=2048):
+def process_full_video(api_keys, video_path, vad_filter=True, songs_mode=False, existing_raw="", chunk_minutes=5, thinking_budget=2048, selected_model="gemini-2.5-flash"):
     audio_path = video_path.replace(".mp4", ".wav")
     last_translated_sec = parse_existing_raw_to_last_time(existing_raw)
     
@@ -393,9 +406,8 @@ def process_full_video(api_keys, video_path, vad_filter=True, songs_mode=False, 
         end_min = int(active_items[-1]["end"] // 60)
         status_header.warning(f"🔄 خەریکی وەرگێڕانی خولەکی **{start_min}** تا **{end_min}**... (پارچەی {index + 1} لە {total})")
             
-        translated, current_key_index = gemini_translate(api_keys, current_key_index, active_items, songs_mode=songs_mode, thinking_budget=thinking_budget)
+        translated, current_key_index = gemini_translate(api_keys, current_key_index, active_items, songs_mode=songs_mode, thinking_budget=thinking_budget, selected_model=selected_model)
         
-        # ئەگەر کێشەیەک لە وەرگێڕاندا ڕوویدا و هیچ دێڕێک نەگەڕایەوە، تەنها بەتاڵی تێناپەڕێنین
         if not translated:
             st.error("❌ پڕۆسەکە بە سەرکەوتوویی تەواو نەبوو بەهۆی کێشەی کلیل یان پەیوەندی.")
             return "\n".join(all_cues)
@@ -528,6 +540,24 @@ def main():
 
     st.markdown("---")
     
+    # 🤖 زیادکردنی بەشی هەڵبژاردنی مۆدێلی زیرەکی دەستکرد لایە بەکارهێنەرەوە [1, 2]
+    st.subheader("🤖 هەڵبژاردنی مۆدێلی زیرەکی دەستکرد")
+    selected_model_input = st.selectbox(
+        "مۆدێلی دڵخوازی خۆت هەڵبژێرە:",
+        [
+            "gemini-3.5-flash (نوێترین مۆدێل - زۆر بەهێز بەڵام لەوانەیە هەندێک کات لۆدی زۆر بێت)",
+            "gemini-2.5-flash (پێشنیارکراو - نوێترین، سەقامگیرترین و خێراترین)",
+            "gemini-1.5-flash (یەکجار سووک و خێرا)",
+            "gemini-1.5-pro (زۆر زیرەک و قووڵ - بۆ تێکستی ئەدەبی قورس)"
+        ],
+        index=1, # مۆدێلی ٢.٥ فلاش وەک جێگیر بەهۆی سەقامگیری
+        help="ئەگەر مۆدێلی نوێی ٣.٥ قەرەباڵغ بوو، دەتوانیت لێرەوە بیگۆڕیت بۆ مۆدێلەکانی تر."
+    )
+    # دەرهێنانی تەنها ناوی فەرمی مۆدێلەکە [1, 2]
+    selected_model = selected_model_input.split(" ")[0].strip()
+
+    st.markdown("---")
+    
     # ⚡ زیادکردنی دوگمەی شێوازی کارکردنی جیاواز بەدەستی بەکارهێنەر
     st.subheader("⚡ شێوازی بیرکردنەوەی زیرەکی دەستکرد")
     speed_mode = st.radio(
@@ -537,6 +567,7 @@ def main():
             "⚖️ ستاندارد و هاوسەنگ (وەرگێڕانی خێرا بە مانا و پاراستنی فۆرمات)",
             "🧠 زۆر قووڵ و ورد (وەرگێڕانی قووڵ بەڵام هێواشترە)"
         ], 
+        index=1,
         horizontal=True,
         label_visibility="collapsed"
     )
@@ -620,7 +651,7 @@ def main():
         st.session_state.sub_temp_dir = temp_dir
         st.session_state.sub_input_path = in_p
         
-        raw_text = process_full_video(api_keys, in_p, vad_filter=vad_filter, songs_mode=songs_mode, existing_raw="", chunk_minutes=chunk_minutes, thinking_budget=thinking_budget)
+        raw_text = process_full_video(api_keys, in_p, vad_filter=vad_filter, songs_mode=songs_mode, existing_raw="", chunk_minutes=chunk_minutes, thinking_budget=thinking_budget, selected_model=selected_model)
         if raw_text:
             st.session_state.sub_raw = raw_text
             st.rerun()
@@ -634,7 +665,7 @@ def main():
         in_p = st.session_state.sub_input_path
         existing_raw = st.session_state.get("edited_raw_text", st.session_state.sub_raw)
         
-        raw_text = process_full_video(api_keys, in_p, vad_filter=vad_filter, songs_mode=songs_mode, existing_raw=existing_raw, chunk_minutes=chunk_minutes, thinking_budget=thinking_budget)
+        raw_text = process_full_video(api_keys, in_p, vad_filter=vad_filter, songs_mode=songs_mode, existing_raw=existing_raw, chunk_minutes=chunk_minutes, thinking_budget=thinking_budget, selected_model=selected_model)
         if raw_text:
             st.session_state.sub_raw = raw_text
             st.rerun()
