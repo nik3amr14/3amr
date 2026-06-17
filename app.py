@@ -441,7 +441,11 @@ def build_ass_file(cues, font_size, wm_text, wm_color, wm_font_size, wm_alignmen
         ass.append(f"Dialogue: 0,0:00:00.00,9:59:59.99,WatermarkStyle,,0,0,0,,{{\\an{wm_alignment}}}{wm_text}")
         
     for c in cues:
-        txt = clean_punctuation(c['text'])
+        # لێرەدا چاکسازییەکە دەکەین بۆ ئەوەی تاگی ڕەنگەکان لەناو نەچن
+        if "\\" in c['text'] or "{" in c['text'] or "&" in c['text']:
+            txt = c['text']
+        else:
+            txt = clean_punctuation(c['text'])
         ass.append(f"Dialogue: 0,{c['start']},{c['end']},{c.get('style','Default')},,0,0,0,,{c.get('alignment_tag','{\\an2}')}{txt}")
     return "\n".join(ass)
 
@@ -474,8 +478,11 @@ def main():
     tab_sub, tab_conv = st.tabs(["🎬 ژێرنووس", "🔄 گۆڕینی فۆرمات"])
 
     with tab_sub:
-        # گۆڕانکارییەکە لێرەدایە: خوێندنەوەی کلیلەکە لە Secrets لەبری نووسینی بە دەست
-        api_key = st.secrets.get("GEMINI_API_KEY", "")
+        # کلیلە سەرەکییەکەت بە شێوەیەکی خۆکار لە Secrets دەخوێنێتەوە ئەگەر دانرابێت
+        default_key = st.secrets.get("GEMINI_API_KEY", "")
+        
+        # سندوقی نووسینەکە دەهێنینەوە کە خۆکارانە کلیلە ئەسڵییەکەت تێدایە، بەڵام دەتوانیت لێرەش کلیلەکەت بگۆڕیت ئەگەر تەواو بوو!
+        api_key = st.text_input("🔑 Gemini API Key", type="password", value=default_key)
         
         video_file = st.file_uploader("📁 ڤیدیۆ بار بکە (MP4/MOV)", type=["mp4", "mov"])
 
