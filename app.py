@@ -283,7 +283,8 @@ Output format (ALWAYS return a JSON array of the EXACT SAME LENGTH as input):
 # ══════════════════════════════════════════════════════════
 @st.cache_resource
 def load_whisper():
-    return WhisperModel("small", device="cpu", compute_type="int8")
+    # گۆڕانکاری بۆ مۆدێلی زۆر خێراتر و سووکتری base بۆ ڕێگریکردن لە وەستان و نەدۆزرانەوەی قسەکان
+    return WhisperModel("base", device="cpu", compute_type="int8")
 
 def extract_audio(video_path, audio_path):
     subprocess.run(["ffmpeg", "-y", "-i", video_path, "-vn", "-ac", "1", "-ar", "16000", audio_path], capture_output=True, check=True)
@@ -294,7 +295,8 @@ def transcribe_audio(audio_path):
         audio_path,
         beam_size=5,
         word_timestamps=True,
-        vad_filter=True,
+        # فلتەری بێدەنگی لێرەدا دەکوژێنینەوە تا کێشەی نەدۆزینەوەی دەنگی مۆسیقا یان ڤیدیۆکەت بە تەواوی نەمێنێت
+        vad_filter=False,
         vad_parameters=dict(min_silence_duration_ms=300)
     )
     
@@ -478,8 +480,13 @@ def main():
     tab_sub, tab_conv = st.tabs(["🎬 ژێرنووس", "🔄 گۆڕینی فۆرمات"])
 
     with tab_sub:
-        # کلیلە سەرەکییەکەت بە شێوەیەکی خۆکار لە Secrets دەخوێنێتەوە ئەگەر دانرابێت
-        default_key = st.secrets.get("GEMINI_API_KEY", "")
+        # کلیلەکە بە شێوەیەکی سەلامەت لەسەر هەردوو سێرڤەری ستریملیت و هاگینگ فەیس دەخوێنێتەوە بۆ ڕێگریکردن لە کراش
+        default_key = os.environ.get("GEMINI_API_KEY", "")
+        if not default_key:
+            try:
+                default_key = st.secrets.get("GEMINI_API_KEY", "")
+            except Exception:
+                default_key = ""
         
         # سندوقی نووسینەکە دەهێنینەوە کە خۆکارانە کلیلە ئەسڵییەکەت تێدایە، بەڵام دەتوانیت لێرەش کلیلەکەت بگۆڕیت ئەگەر تەواو بوو!
         api_key = st.text_input("🔑 Gemini API Key", type="password", value=default_key)
