@@ -283,8 +283,8 @@ Output format (ALWAYS return a JSON array of the EXACT SAME LENGTH as input):
 # ══════════════════════════════════════════════════════════
 @st.cache_resource
 def load_whisper():
-    # گۆڕانکاری بۆ مۆدێلی زۆر خێراتر و سووکتری base بۆ ڕێگریکردن لە وەستان و نەدۆزرانەوەی قسەکان
-    return WhisperModel("base", device="cpu", compute_type="int8")
+    # گەڕاندنەوەی مۆدێلی زۆر بەهێزی جاران
+    return WhisperModel("small", device="cpu", compute_type="int8")
 
 def extract_audio(video_path, audio_path):
     subprocess.run(["ffmpeg", "-y", "-i", video_path, "-vn", "-ac", "1", "-ar", "16000", audio_path], capture_output=True, check=True)
@@ -295,7 +295,7 @@ def transcribe_audio(audio_path):
         audio_path,
         beam_size=5,
         word_timestamps=True,
-        # فلتەری بێدەنگی لێرەدا دەکوژێنینەوە تا کێشەی نەدۆزینەوەی دەنگی مۆسیقا یان ڤیدیۆکەت بە تەواوی نەمێنێت
+        # کوژاندنەوەی فلتەری بێدەنگی بۆ دۆزینەوەی تەواوی قسەکان بە شێوەی خۆکارانە و بەبێ کێشە
         vad_filter=False,
         vad_parameters=dict(min_silence_duration_ms=300)
     )
@@ -494,6 +494,10 @@ def main():
         video_file = st.file_uploader("📁 ڤیدیۆ بار بکە (MP4/MOV)", type=["mp4", "mov"])
 
         st.markdown("---")
+        direction_label = st.radio("🌐 ئاڕاستەی وەرگێڕان", ["بیانی / ئینگلیزی  →  کوردی سۆرانی", "کوردی  →  ئینگلیزی"], horizontal=True)
+        dir_key = "ku→en" if "کوردی  →" in direction_label else "→ku"
+
+        st.markdown("---")
         font_size = st.slider("📐 قەبارەی فۆنتی ژێرنووس", 20, 80, 52)
 
         st.markdown("---")
@@ -537,6 +541,7 @@ def main():
             st.session_state.sub_temp_dir = temp_dir
             st.session_state.sub_input_path = in_p
             
+            # بەستنەوەی زمان لێرەدا جێبەجێ کراوە
             raw_text = process_full_video(api_key.strip(), in_p)
             if raw_text:
                 st.session_state.sub_raw = raw_text
