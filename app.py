@@ -212,14 +212,18 @@ Output format (ALWAYS return a JSON array of the EXACT SAME LENGTH as input):
     user_prompt = f"Translate ALL cues exactly:\n{json.dumps(transcript_chunk, ensure_ascii=False)}"
     status_msg = st.empty()
     
-    while True:
+    max_attempts = len(api_keys) * 3
+    attempt = 0
+    last_error = None
+    
+    while attempt < max_attempts:
         try:
             current_api_key = api_keys[current_key_index]
             client = genai.Client(api_key=current_api_key)
             
-            # نیشاندانی زانیاری کارکردن لەسەر بنەمای هەڵبژاردنی بەکارهێنەر
+            # نیشاندانی تێکستی گونجاو لەسەر بنەمای شێوازی کارکردن
             if thinking_budget == 0:
-                status_msg.info(f"⚡ خەریکی وەرگێڕانی یەکجار خێران بە کلیلی ژمارە {current_key_index + 1}... (ڕاستەوخۆ دەنووسێت)")
+                status_msg.info(f"⚡ خەریکی وەرگێڕانی خێران بە کلیلی ژمارە {current_key_index + 1}... (هەوڵی {attempt+1}/{max_attempts})")
                 config_params = dict(
                     system_instruction=system_prompt, 
                     temperature=0.70,  
@@ -227,25 +231,25 @@ Output format (ALWAYS return a JSON array of the EXACT SAME LENGTH as input):
                     response_mime_type="application/json"
                 )
             elif thinking_budget == 2048:
-                status_msg.info(f"⚖️ خەریکی وەرگێڕانی هاوسەنگ و ستانداردین بە کلیلی ژمارە {current_key_index + 1}... (هاوسەنگی نێوان خێرایی و وردی)")
+                status_msg.info(f"⚖️ خەریکی وەرگێڕانی هاوسەنگین بە کلیلی ژمارە {current_key_index + 1}... (هەوڵی {attempt+1}/{max_attempts})")
                 config_params = dict(
                     system_instruction=system_prompt, 
                     temperature=0.70,  
                     max_output_tokens=65536,
                     response_mime_type="application/json",
                     thinking_config=types.ThinkingConfig(
-                        thinking_budget=2048  # بەکارهێنانی بودجەی ستاندارد [1]
+                        thinking_budget=2048  
                     )
                 )
             else:
-                status_msg.info(f"🧠 خەریکی وەرگێڕانی زۆر قووڵ و چڕین بە کلیلی ژمارە {current_key_index + 1}... (کەمێک هێواشترە)")
+                status_msg.info(f"🧠 خەریکی وەرگێڕانی زۆر قووڵین بە کلیلی ژمارە {current_key_index + 1}... (هەوڵی {attempt+1}/{max_attempts})")
                 config_params = dict(
                     system_instruction=system_prompt, 
                     temperature=0.70,  
                     max_output_tokens=65536,
                     response_mime_type="application/json",
                     thinking_config=types.ThinkingConfig(
-                        thinking_budget=-1  # بەکارهێنانی زۆرترین بودجە [1]
+                        thinking_budget=-1  
                     )
                 )
             
@@ -254,24 +258,32 @@ Output format (ALWAYS return a JSON array of the EXACT SAME LENGTH as input):
                 contents=[user_prompt],
                 config=types.GenerateContentConfig(**config_params)
             )
-            data = extract_json(resp.text)
-            status_msg.empty()
-            if data: return data, current_key_index
+            
+            # تاقیکردنەوەی خوێندنەوەی JSON
+            try:
+                data = extract_json(resp.text)
+                status_msg.empty()
+                if data: return data, current_key_index
+            except Exception:
+                raise ValueError(f"Gemini returned an empty/invalid JSON list.")
             
         except Exception as e:
-            error_msg = str(e)
-            if "429" in error_msg or "RESOURCE_EXHAUSTED" in error_msg or "Quota" in error_msg:
-                next_index = (current_key_index + 1) % len(api_keys)
-                if next_index == current_key_index:
-                    status_msg.error("❌ هەموو کلیلەکان لیمیتیان تەواو بووە! تکایە کەمێک پشوو بدە یان کلیلی نوێ دابنێ.")
-                    time.sleep(10)
-                else:
-                    current_key_index = next_index
-                    status_msg.warning(f"⚠️ کلیلەکە ماندوو بوو! ڕاستەوخۆ گۆڕدرا بۆ کلیلی ژمارە {current_key_index + 1}...")
-                    time.sleep(2)
+            last_error = str(e)
+            attempt += 1
+            
+            if "429" in last_error or "RESOURCE_EXHAUSTED" in last_error or "Quota" in last_error:
+                current_key_index = (current_key_index + 1) % len(api_keys)
+                status_msg.warning(f"⚠️ کلیلەکە ماندوو بوو! گۆڕدرا بۆ کلیلی ژمارە {current_key_index + 1}...")
+                time.sleep(3)
+            elif "API_KEY" in last_error.upper() or "401" in last_error or "403" in last_error:
+                status_msg.error(f"❌ کلیلەکە (API Key) کێشەی هەیە یان کار ناکات! هەڵە: {last_error}")
+                return [], current_key_index
             else:
-                status_msg.info("⏳ سێرڤەر خەریکە وەڵام دەداتەوە...")
+                status_msg.warning(f"⚠️ هەڵەیەک ڕوویدا (هەوڵی {attempt}/{max_attempts}):\n`{last_error}`")
                 time.sleep(2)
+                
+    status_msg.error(f"❌ نەتوانرا وەرگێڕانەکە بکرێت دوای چەندین هەوڵ.\nکۆتا هەڵە:\n`{last_error}`")
+    return [], current_key_index
 
 # ══════════════════════════════════════════════════════════
 #  FASTER WHISPER (Fallback Fix)
@@ -381,8 +393,13 @@ def process_full_video(api_keys, video_path, vad_filter=True, songs_mode=False, 
         end_min = int(active_items[-1]["end"] // 60)
         status_header.warning(f"🔄 خەریکی وەرگێڕانی خولەکی **{start_min}** تا **{end_min}**... (پارچەی {index + 1} لە {total})")
             
-        # ڕەوانەکردنی فایلی وەرگێڕان بە فلتەری بیرکردنەوەی هەڵبژێردراوەوە
         translated, current_key_index = gemini_translate(api_keys, current_key_index, active_items, songs_mode=songs_mode, thinking_budget=thinking_budget)
+        
+        # ئەگەر کێشەیەک لە وەرگێڕاندا ڕوویدا و هیچ دێڕێک نەگەڕایەوە، تەنها بەتاڵی تێناپەڕێنین
+        if not translated:
+            st.error("❌ پڕۆسەکە بە سەرکەوتوویی تەواو نەبوو بەهۆی کێشەی کلیل یان پەیوەندی.")
+            return "\n".join(all_cues)
+            
         all_cues.extend(translated)
             
     # کۆتایی هاتن
@@ -390,6 +407,7 @@ def process_full_video(api_keys, video_path, vad_filter=True, songs_mode=False, 
     percent_text.success("🎉 لەسەدا 100٪ تەواو بوو!")
     status_header.empty()
     
+    validated = validate_cues(all_cues)
     raw_lines = []
     for c in validated:
         s = float_to_ass_time(c["start"])
@@ -523,16 +541,15 @@ def main():
         label_visibility="collapsed"
     )
     
-    # لێکدانەوەی ڕێکخستنی کلیل لەسەر بنەمای هەڵبژاردنەکە
     if "⚡ یەکجار خێرا" in speed_mode:
         use_thinking = False
         thinking_budget = 0
     elif "⚖️ ستاندارد" in speed_mode:
         use_thinking = True
-        thinking_budget = 2048  # بیرکردنەوەی ستاندارد بە لیمیتی گونجاو [1]
+        thinking_budget = 2048
     else:
         use_thinking = True
-        thinking_budget = -1    # زۆرترین بیرکردنەوەی قووڵ [1]
+        thinking_budget = -1
 
     st.markdown("---")
     c_audio, c_chunk = st.columns(2)
@@ -603,7 +620,6 @@ def main():
         st.session_state.sub_temp_dir = temp_dir
         st.session_state.sub_input_path = in_p
         
-        # ڕەوانەکردنی هێزی بیرکردنەوە بە داینامیکی
         raw_text = process_full_video(api_keys, in_p, vad_filter=vad_filter, songs_mode=songs_mode, existing_raw="", chunk_minutes=chunk_minutes, thinking_budget=thinking_budget)
         if raw_text:
             st.session_state.sub_raw = raw_text
@@ -668,7 +684,7 @@ def main():
             with open(ass_p, "w", encoding="utf-8") as f: f.write(ass_txt)
             with open(srt_p, "w", encoding="utf-8") as f: f.write(srt_txt)
 
-            with st.spinner("🔥 khەریکی لکاندنی ژێرنووسە بە ڤیدیۆکەوە (FFmpeg)..."):
+            with st.spinner("🔥 خەریکی لکاندنی ژێرنووسە بە ڤیدیۆکەوە (FFmpeg)..."):
                 try: burn_subtitles(in_p, ass_p, out_p)
                 except Exception as e: st.error(f"❌ هەڵە لە FFmpeg:\n`{e}`"); return
 
