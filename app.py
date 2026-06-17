@@ -398,7 +398,7 @@ def throttle_countdown():
 # ══════════════════════════════════════════════════════════
 #  ⚙️ بەڕێوەبەری سەرەکی پڕۆژەکە (ORCHESTRATOR)
 # ══════════════════════════════════════════════════════════
-def process_full_video(api_key, video_path, is_mixed_audio):
+def process_full_video(api_key, video_path, is_mixed_audio, existing_raw=""):
     audio_path = video_path.replace(".mp4", ".wav")
     
     with st.spinner("🎵 خەریکی دەرهێنانی دەنگی ڤیدیۆکەیە..."):
@@ -413,13 +413,45 @@ def process_full_video(api_key, video_path, is_mixed_audio):
     with st.spinner("🧠 خەریکی وەرگێڕانە بۆ کوردی سۆرانی سینەمایی..."):
         chunks = build_translation_chunks(cues, chunk_minutes=TRANSLATION_PASS_MINUTES)
         all_cues = []
+        last_translated_sec = 0.0
+        
+        # گۆڕینەوەی دەقە کۆنەکان بۆ سەر پاشەکەوتی فۆرماتی چاککراو
+        if existing_raw.strip():
+            existing_cues = parse_raw_text(existing_raw)
+            if existing_cues:
+                formatted_existing = []
+                for ec in existing_cues:
+                    formatted_existing.append({
+                        "start": secs(ec["start"]),
+                        "end": secs(ec["end"]),
+                        "text": ec["text"]
+                    })
+                all_cues.extend(formatted_existing)
+                last_translated_sec = formatted_existing[-1]["end"]
+                st.info(f"🔄 دەستپێکردنەوە لە کاتی وەرگێڕانی: {sec_to_ass(last_translated_sec)}")
+                
         total = len(chunks)
-        progress = st.progress(0)
+        progress = st.progress(min(last_translated_sec / get_video_duration(video_path), 1.0) if get_video_duration(video_path) > 0 else 0.0)
         
         local_client = genai.Client(api_key=api_key)
         
         for index, chunk in enumerate(chunks):
-            translated = gemini_translate(local_client, chunk, index + 1, is_mixed_audio)
+            # ئەگەر پارچەکە پێشتر وەرگێڕدرابوو تێپەڕی دەکەین
+            if chunk and chunk[-1]["end"] <= last_translated_sec:
+                progress.progress((index + 1) / total)
+                continue
+                
+            # تەنها ئەو ڕستانە وەردەگێڕین کە لە کاتی لیمیتی کۆن تێنەپەڕیون
+            remaining_cues_in_chunk = [c for c in chunk if c["start"] >= last_translated_sec]
+            if not remaining_cues_in_chunk:
+                progress.progress((index + 1) / total)
+                continue
+                
+            translated = gemini_translate(local_client, remaining_cues_in_chunk, index + 1, is_mixed_audio)
+            if not translated:
+                st.error("❌ وەرگێڕان وەستا بەهۆی کێشەی کلیلەکە یان سێرڤەرەوە.")
+                break
+                
             all_cues.extend(translated)
             progress.progress((index + 1) / total)
             if index < total - 1:
@@ -438,10 +470,6 @@ def process_full_video(api_key, video_path, is_mixed_audio):
 # ══════════════════════════════════════════════════════════
 #  ASS & SRT BUILDERS
 # ══════════════════════════════════════════════════════════
-def hex_to_ass(h: str) -> str:
-    h = h.lstrip("#").upper().ljust(6, "0")
-    return f"&H00{h[4:6]}{h[2:4]}{h[0:2]}&"
-
 def build_ass_file(cues, font_size, wm_text, wm_color, wm_font_size, wm_alignment):
     font_name = find_kurdish_font()
     wm_ass = hex_to_ass(wm_color)
@@ -547,18 +575,38 @@ def main():
             st.session_state.sub_temp_dir = None
 
         st.markdown("---")
-        if st.button("🧠 ١. دەرهێنان و وەرگێڕان (دەستپێکردن)", type="primary", use_container_width=True):
+        col_run, col_resume, col_reset = st.columns([2, 2, 1])
+        with col_run:
+            start_clicked = st.button("🧠 ١. دەرهێنان و وەرگێڕان (دەستپێکردن)", type="primary", use_container_width=True)
+        with col_resume:
+            resume_clicked = st.button("▶️ بەردەوام بوون", use_container_width=True, disabled=not st.session_state.sub_raw)
+        with col_reset:
+            reset_clicked = st.button("🔄 سفر", use_container_width=True, help="ڤیدیۆی بارکراو و وەرگێڕانی هەلگیراو پاک دەکاتەوە")
+
+        if reset_clicked:
+            _cleanup_sub_session()
+            st.rerun()
+
+        if start_clicked or resume_clicked:
             if not api_key: st.error("❌ کلیلی Gemini بنووسە."); return
             if not video_file: st.error("❌ ڤیدیۆ بار بکە."); return
             
-            temp_dir = tempfile.mkdtemp()
-            in_p = os.path.join(temp_dir, "input.mp4")
-            with open(in_p, "wb") as f: f.write(video_file.read())
+            if start_clicked:
+                _cleanup_sub_session()
+                temp_dir = tempfile.mkdtemp()
+                in_p = os.path.join(temp_dir, "input.mp4")
+                with open(in_p, "wb") as f: f.write(video_file.read())
+                st.session_state.sub_temp_dir = temp_dir
+                st.session_state.sub_input_path = in_p
+                existing_raw = ""
+            else:
+                in_p = st.session_state.sub_input_path
+                existing_raw = st.session_state.get("sub_editor_box", st.session_state.sub_raw) or ""
+                if not in_p or not os.path.exists(in_p):
+                    st.error("❌ ڤیدیۆی ئۆریجیناڵ نەماوە — دووبارە بار بکە و وەرگێڕان دەستپێکە.")
+                    return
             
-            st.session_state.sub_temp_dir = temp_dir
-            st.session_state.sub_input_path = in_p
-            
-            raw_text = process_full_video(api_key.strip(), in_p, is_mixed_audio)
+            raw_text = process_full_video(api_key.strip(), in_p, is_mixed_audio, existing_raw)
             if raw_text:
                 st.session_state.sub_raw = raw_text
                 st.rerun()
@@ -566,7 +614,21 @@ def main():
         if st.session_state.sub_raw:
             st.success("✅ وەرگێڕان تەواو بوو! دەتوانیت پێداچوونەوەی بۆ بکەیت.")
             
-            edited_raw = st.text_area("📝 ستەرەکان — پێش لکاندن دەسکاریان بکە", value=st.session_state.sub_raw, height=400)
+            st.markdown("### ⏰ ڕێکخستنی کاتی ژێرنووس (Subtitle Delay)")
+            st.caption("ئەگەر نووسینەکە پێش دەنگ دەرکەوتووە، کاتەکە زیاد بکە (نموونە 1.5). ئەگەر درەنگ دەرکەوتووە، کەم بکەرەوە (نموونە -1.0).")
+            
+            col_delay_val, col_delay_btn = st.columns([2, 1])
+            with col_delay_val:
+                delay_val = st.number_input("⏱️ بڕی دواخستن یان پێشخستن (بە چرکە)", min_value=-30.0, max_value=30.0, value=0.0, step=0.5, format="%.1f", key="delay_val_input")
+            with col_delay_btn:
+                st.write("")
+                apply_delay = st.button("🔄 گۆڕینی کاتەکان", use_container_width=True)
+                
+            if apply_delay and delay_val != 0.0:
+                st.session_state.sub_raw = shift_transcript(st.session_state.sub_raw, delay_val)
+                st.rerun()
+
+            edited_raw = st.text_area("📝 ستەرەکان — پێش لکاندن دەسکاریان بکە", value=st.session_state.sub_raw, height=400, key="sub_editor_box")
 
             if st.button("🔥 ٢. ژێرنووس بخەرە سەر ڤیدیۆ", type="primary", use_container_width=True):
                 cues = parse_raw_text(edited_raw)
