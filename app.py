@@ -73,13 +73,6 @@ def sec_to_ass(t: float) -> str:
     cs = int((t - int(t)) * 100)
     return f"{h}:{m:02d}:{s:02d}.{cs:02d}"
 
-def sec_to_srt(t: float) -> str:
-    h = int(t // 3600)
-    m = int((t % 3600) // 60)
-    s = int(t % 60)
-    ms = int((t - int(t)) * 1000)
-    return f"{h:02d}:{m:02d}:{s:02d},{ms:03d}"
-
 def secs(ts: str) -> float:
     try:
         ts = ts.strip().replace(",", ".")
@@ -168,7 +161,6 @@ def validate_cues(cues: list) -> list:
 #  GEMINI TRANSLATION (Pro Logic with Temp 0.8 & Cinematic Prompt)
 # ══════════════════════════════════════════════════════════
 def gemini_translate(api_keys, current_key_index, transcript_chunk, thinking_budget, selected_model):
-    # پڕۆمپتی نوێ: یەکجار سینەمایی، پاراو، و دوور لە وەرگێڕانی وشک
     system_prompt = """
 تۆ لێهاتووترین، زیرەکترین و هەستیارترین دەرهێنەری دۆبلاژ و وەرگێڕی سینەماییت لە زمانی ئینگلیزییەوە بۆ کوردی سۆرانی.
 ئامانجی تۆ ئەوەیە وەرگێڕانێکی هێندە پاراو، زیندوو و پڕ هەست بکەیت کە بینەر هەست بکات کارەکتەرەکان خۆیان کوردن و بە زگماکی قسە دەکەن!
@@ -189,7 +181,6 @@ def gemini_translate(api_keys, current_key_index, transcript_chunk, thinking_bud
     if not valid_keys:
         return [], current_key_index
 
-    # دروستکردنی لیستی مۆدێلەکان - سەرەتا مۆدێلەکەی خۆت، پاشان یەدەگ
     models_to_try = [selected_model]
     fallback_pool = ["gemini-3.5-flash", "gemini-2.5-flash", "gemini-3-flash-preview"]
     for m in fallback_pool:
@@ -198,7 +189,6 @@ def gemini_translate(api_keys, current_key_index, transcript_chunk, thinking_bud
 
     max_attempts = len(valid_keys) * 2
     
-    # هەوڵدان بۆ هەر مۆدێلێک بە نۆرە
     for m_name in models_to_try:
         attempt = 0
         while attempt < max_attempts:
@@ -210,7 +200,7 @@ def gemini_translate(api_keys, current_key_index, transcript_chunk, thinking_bud
                     status_msg.info(f"⚡ مۆدێلی [{m_name}] - خەریکی وەرگێڕانی خێران بە کلیلی {current_key_index + 1}...")
                     config_params = dict(
                         system_instruction=system_prompt, 
-                        temperature=0.8,  # گەرمی کرایە 0.8 بۆ وەرگێڕانی شاز و سروشتی
+                        temperature=0.8,
                         max_output_tokens=65536,
                         response_mime_type="application/json"
                     )
@@ -218,7 +208,7 @@ def gemini_translate(api_keys, current_key_index, transcript_chunk, thinking_bud
                     status_msg.info(f"🧠 مۆدێلی [{m_name}] - خەریکی بیرکردنەوە و وەرگێڕانین بە کلیلی {current_key_index + 1}...")
                     config_params = dict(
                         system_instruction=system_prompt, 
-                        temperature=0.8,  # گەرمی کرایە 0.8
+                        temperature=0.8,
                         max_output_tokens=65536,
                         response_mime_type="application/json",
                         thinking_config=types.ThinkingConfig(thinking_budget=thinking_budget)
@@ -245,7 +235,7 @@ def gemini_translate(api_keys, current_key_index, transcript_chunk, thinking_bud
                 elif "503" in err_str or "UNAVAILABLE" in err_str or "demand" in err_str.lower():
                     status_msg.warning(f"⚠️ مۆدێلی {m_name} قەرەباڵغە لای گووگڵ! دەچینە سەر مۆدێلی یەدەگ...")
                     time.sleep(2)
-                    break # شکاندنی بازنەی ئەم مۆدێلە و چوونە سەر مۆدێلی داهاتوو لە models_to_try
+                    break 
                 else:
                     status_msg.error(f"⏳ کێشەی پەیوەندی هەیە، دووبارە تاقیدەکەینەوە...")
                     time.sleep(3)
@@ -262,7 +252,6 @@ def load_whisper():
     return WhisperModel("medium", device="cpu", compute_type="int8")
 
 def extract_audio(video_path, audio_path):
-    # بەکارهێنانی dynaudnorm بۆ ئەوەی دەنگی چرپە و خەیاڵ زۆر بە جوانی بەرز بکاتەوە بێ تێکدانی دەنگە بەرزەکان
     subprocess.run([
         "ffmpeg", "-y", "-i", video_path, 
         "-vn", "-ac", "1", "-ar", "16000", 
@@ -272,13 +261,12 @@ def extract_audio(video_path, audio_path):
 
 def transcribe_audio(audio_path):
     model = load_whisper()
-    # ڕێکخستنی زۆر هەستیار بۆ ئەوەی هیچ چرپەیەک و خەیاڵێک لەگەڵ مۆسیقادا ون نەبێت
     kwargs = dict(
         beam_size=5,
         word_timestamps=True,
         vad_filter=True,
-        condition_on_previous_text=False, # ڕێگری دەکات لە گیرخواردن و دووبارەبوونەوە
-        no_speech_threshold=0.3,          # زۆر هەستیار کراوە بۆ دەنگی کز
+        condition_on_previous_text=False,
+        no_speech_threshold=0.3,
         compression_ratio_threshold=2.4,
         temperature=0.0,
         vad_parameters=dict(min_silence_duration_ms=300)
@@ -318,7 +306,6 @@ def transcribe_audio(audio_path):
     return cues
 
 def build_chunks(cues, chunk_minutes):
-    # سیستەمی بڕگەکردنی پارێزراو - دڵنیایی دەدات کە هیچ دێڕێک ون نابێت
     max_seconds = chunk_minutes * 60
     chunks, current, chunk_start = [], [], None
     for item in cues:
@@ -367,7 +354,6 @@ def process_full_video(api_keys, video_path, existing_raw="", chunk_minutes=5, t
     for index, chunk in enumerate(chunks):
         chunk_last_end = chunk[-1]["end"] if chunk else 0.0
         
-        # ڕێژەی سەدی ڕاستەقینە
         pct = int((index / total) * 100)
         percent_bar.progress(index / total)
         percent_text.markdown(f"**لە ٪{pct} ی ڤیدیۆکە تەواو بووە...**")
@@ -400,7 +386,7 @@ def process_full_video(api_keys, video_path, existing_raw="", chunk_minutes=5, t
     return "\n".join(raw_lines)
 
 # ══════════════════════════════════════════════════════════
-#  ASS & SRT BUILDERS
+#  ASS BUILDER
 # ══════════════════════════════════════════════════════════
 def hex_to_ass(h: str) -> str:
     h = h.lstrip("#").upper().ljust(6, "0")
@@ -422,7 +408,6 @@ def build_ass_file(cues, font_size, wm_text, wm_color, wm_font_size, wm_alignmen
     wma = hex_to_ass(wm_color)
     vw, vh = get_video_resolution(video_path) if video_path else (1280, 720)
 
-    # چارەسەری کێشەی ناوە ئینگلیزییەکان لەسەر شاشەی مۆبایل و پلەیەرەکان
     header = [
         "[Script Info]",
         "ScriptType: v4.00+",
@@ -448,7 +433,6 @@ def build_ass_file(cues, font_size, wm_text, wm_color, wm_font_size, wm_alignmen
 
     for c in cues:
         txt = c.get("text", "")
-        # تەنها دەقەکان خاوێن دەکەینەوە، تاگەکان لادەبەین ئەگەر بمێنن
         if "{\\" not in txt:
             txt = clean_punctuation(txt)
             
@@ -457,15 +441,6 @@ def build_ass_file(cues, font_size, wm_text, wm_color, wm_font_size, wm_alignmen
         events.append(f"Dialogue: 0,{c['start']},{c['end']},{style},,0,0,0,,{a_tag}{txt}")
 
     return "\n".join(header + events)
-
-def build_srt_file(cues):
-    lines = []
-    for idx, c in enumerate(cues, start=1):
-        s = sec_to_srt(secs(c["start"]))
-        e = sec_to_srt(secs(c["end"]))
-        txt = clean_punctuation(re.sub(r'\{\\[^}]*\}', '', c.get("text", "")))
-        lines.append(f"{idx}\n{s} --> {e}\n{txt}\n")
-    return "\n".join(lines)
 
 def burn_subtitles(video_path, ass_path, output_path):
     subprocess.run(["ffmpeg", "-y", "-i", video_path, "-vf", f"ass={ass_path}:fontsdir=/tmp", "-c:v", "libx264", "-preset", "veryfast", "-crf", "25", "-c:a", "copy", output_path], capture_output=True, check=True)
@@ -634,7 +609,6 @@ def main():
             tmp = st.session_state.sub_temp_dir
             in_p = st.session_state.sub_input_path
             ass_p = os.path.join(tmp, "subs.ass")
-            srt_p = os.path.join(tmp, "subs.srt")
             out_p = os.path.join(tmp, "output.mp4")
 
             intro = []
@@ -660,10 +634,8 @@ def main():
 
             full_cues = intro + cues
             ass_txt = build_ass_file(full_cues, font_size, wm_text, wm_color, wm_font_size, wm_alignment, video_path=in_p)
-            srt_txt = build_srt_file(cues)
             
             with open(ass_p, "w", encoding="utf-8") as f: f.write(ass_txt)
-            with open(srt_p, "w", encoding="utf-8") as f: f.write(srt_txt)
 
             with st.spinner("🔥 خەریکی لکاندنی ژێرنووسە بە ڤیدیۆکەوە (FFmpeg)..."):
                 try: burn_subtitles(in_p, ass_p, out_p)
@@ -673,10 +645,7 @@ def main():
             with open(out_p, "rb") as f: vb = f.read()
             auto_dl(vb, "subtitled.mp4", "video/mp4")
             
-            c1, c2, c3 = st.columns(3)
-            c1.download_button("⬇️ ڤیدیۆ", vb, "subtitled.mp4", "video/mp4", use_container_width=True)
-            c2.download_button("⬇️ SRT", srt_txt, "subtitle.srt", "text/plain", use_container_width=True)
-            c3.download_button("⬇️ ASS", ass_txt, "subtitle.ass", "text/plain", use_container_width=True)
+            st.download_button("⬇️ دابەزاندنی ڤیدیۆ", vb, "subtitled.mp4", "video/mp4", use_container_width=True)
             st.video(vb)
 
 if __name__ == "__main__":
