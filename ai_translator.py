@@ -1,124 +1,72 @@
 import json
 import re
 import time
+import math
+import random
+from pydantic import BaseModel
 
 from google import genai
 from google.genai import types
 
-# ---------------------------------------------------------------------------
-# Configuration constants
-# ---------------------------------------------------------------------------
+# ═══════════════════════════════════════════════════════════════════
+#  ١. قوفڵکردنی شێوازی وەڵام بە قالبێکی بیرکاری (Pydantic Schema) [2.1]
+# ═══════════════════════════════════════════════════════════════════
+class SubtitleItem(BaseModel):
+    start: float
+    end: float
+    text: str
 
-MAX_ATTEMPTS_PER_MODEL = 10
-QUOTA_WAIT_SECONDS = 2
-OVERLOAD_WAIT_SECONDS = 4
-GENERIC_ERROR_WAIT_SECONDS = 1
+class SubtitleResponse(BaseModel):
+    translations: list[SubtitleItem]
 
-# Fixed fallback chain. "gemini-3.1-flash-lite" is intentionally excluded
-# here per spec -- it only ever appears in models_to_try if the caller
-# explicitly passed it in as `selected_model`.
+# ═══════════════════════════════════════════════════════════════════
+#  ڕێکخستنی کاتەکانی پشوودان
+# ═══════════════════════════════════════════════════════════════════
+MAX_ATTEMPTS_PER_MODEL = 6  
+MAX_WAIT_TIME = 15.0        
+
 FALLBACK_MODELS = ["gemini-3.5-flash", "gemini-2.5-flash", "gemini-3-flash-preview"]
-
-# Characters that must never appear in translated Kurdish Sorani text.
 FORBIDDEN_PUNCTUATION = "؟.،!:؛\"'-_"
 
+# ═══════════════════════════════════════════════════════════════════
+#  مێشکی وەرگێڕان (System Prompt)
+# ═══════════════════════════════════════════════════════════════════
+SYSTEM_PROMPT = """You are an elite professional Kurdish Sorani cinematic subtitle translator.
 
-# ---------------------------------------------------------------------------
-# System prompt
-# ---------------------------------------------------------------------------
+Your objective is to translate the spoken text into natural, cinematic Kurdish Sorani.
+Follow these rules strictly:
 
-SYSTEM_PROMPT = """You are an elite professional Kurdish Sorani cinematic subtitle translator working on film and television content.
+1. EXACT TRANSLATION OF SPOKEN WORDS (NO CENSORSHIP):
+   - Translate exactly what the character says with 100% honesty and accuracy.
+   - Do NOT be shy, do NOT censor, and do NOT soften the tone. If a character swears, uses raw slang, or speaks vulgarly, translate it exactly as they said it with equal intensity.
+   - NEVER add unnecessary politeness, and do NOT alter the character's core personality.
 
-You will be given a JSON array of transcript rows. Each row has:
-  - "start": a timestamp value, do not alter
-  - "end": a timestamp value, do not alter
-  - "text": the original spoken text to translate
+2. AVOID OVERUSING HONORIFICS ("کاک" / "خاتوون"):
+   - Do NOT translate Japanese honorifics (like "-san", "-kun", "-sama") or English titles (like "Mr.") literally as "کاک" or "خاتوون" unless it is a highly formal business or government setting.
+   - In casual, friendly, or cool conversations, completely ignore these honorifics and use the character's name directly (e.g. translate "Sasaki-san" as "ساساکی", NOT "کاک ساساکی").
 
-Follow these rules with no exceptions:
+3. NO LITERAL TRANSLATION:
+   - Capture the true spoken meaning.
+   - Maintain natural Kurdish grammar (Subject-Object-Verb). For example, do NOT write "ئێستا بە دەستی تۆیە هەموو شتێک", instead write "ئێستا هەموو شتێک لە دەستی تۆدایە".
 
-1. CINEMATIC & NATURAL MEANING
-   - Never translate word-for-word or literally.
-   - Capture the true meaning, tone, and emotion of the character.
-   - Write the line the way a native Kurdish Sorani speaker would naturally
-     say it in a film, as if the character were originally Kurdish.
-   - Prefer natural, spoken, cinematic phrasing over stiff or formal language.
+4. TIMESTAMPS:
+   - Keep "start" and "end" timestamps exactly as provided. Do not alter them.
 
-2. TIMESTAMPS
-   - Return "start" and "end" EXACTLY as given in the input, unchanged.
-   - Never modify, round, reformat, or omit these keys.
+5. NO PUNCTUATION:
+   - Completely strip all punctuation (؟ . ، ! : ؛ " ' - _) from the translated text. Output only clean words.
 
-3. NO PUNCTUATION
-   - The translated "text" must NOT contain any of these characters:
-     ؟ . ، ! : ؛ " ' - _
-   - Strip all punctuation completely. Output clean words only.
+6. ROW ALIGNMENT:
+   - Translate EVERY single row. The output JSON array must have the exact same number of items as the input.
+"""
 
-4. ROW ALIGNMENT
-   - The output array must contain EXACTLY the same number of objects as the
-     input array.
-   - Never skip, merge, or drop any row -- including whispers, breathing, or
-     other non-verbal sounds.
-   - Every input row must produce exactly one output row, in the same order.
-
-5. OUTPUT FORMAT
-   - Return ONLY a raw JSON array of objects.
-   - Each object must contain exactly the keys: "start", "end", "text".
-   - Do NOT include markdown code fences, explanations, or any text before or
-     after the JSON array."""
-
-
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
-
-def extract_json(text: str) -> list:
-    """
-    Robustly extract a JSON array from a raw Gemini response.
-
-    Handles markdown code fences, leading/trailing commentary, and trailing
-    commas -- the common ways model output deviates from strict JSON.
-    """
-    if not text or not text.strip():
-        raise ValueError("Empty response text -- nothing to parse.")
-
-    cleaned = text.strip()
-
-    # Strip a single pair of markdown code fences if present, e.g. ```json ... ```
-    fence_match = re.search(r"```(?:json)?\s*(.*?)\s*```", cleaned, re.DOTALL | re.IGNORECASE)
-    if fence_match:
-        cleaned = fence_match.group(1).strip()
-
-    # Isolate the outermost JSON array boundaries.
-    start = cleaned.find("[")
-    end = cleaned.rfind("]")
-    if start == -1 or end == -1 or end < start:
-        raise ValueError("No JSON array found in response text.")
-    cleaned = cleaned[start:end + 1]
-
-    # Remove trailing commas before a closing bracket/brace (common model slip).
-    cleaned = re.sub(r",\s*([\]}])", r"\1", cleaned)
-
-    try:
-        data = json.loads(cleaned)
-    except json.JSONDecodeError as exc:
-        raise ValueError(f"Failed to parse JSON after cleaning: {exc}") from exc
-
-    if not isinstance(data, list):
-        raise ValueError("Parsed JSON is not an array.")
-
-    return data
-
-
-def _strip_forbidden_punctuation(text) -> str:
-    """Force-strip forbidden punctuation as a defensive second layer."""
+def _strip_forbidden_punctuation(text: str) -> str:
     if not isinstance(text, str):
         return text
     for ch in FORBIDDEN_PUNCTUATION:
         text = text.replace(ch, "")
     return text
 
-
 def _log(status_msg, message: str) -> None:
-    """Write a status update if status_msg supports it (e.g. an st.status() box)."""
     if status_msg is None:
         return
     if hasattr(status_msg, "write"):
@@ -126,114 +74,65 @@ def _log(status_msg, message: str) -> None:
     elif callable(status_msg):
         status_msg(message)
 
-
 def _build_model_list(selected_model: str) -> list:
-    """selected_model first, then the fixed fallback chain, deduplicated."""
     models_to_try = [selected_model]
     for model_name in FALLBACK_MODELS:
         if model_name not in models_to_try:
             models_to_try.append(model_name)
     return models_to_try
 
-
 def _build_generation_config(thinking_budget, model_name: str):
-    """Build the GenerateContentConfig with corrected model parameters."""
-    
-    # مەپکردنی بەهای ئاستەکان بە جۆری جیاوازی مۆدێلەکان
-    budget_map = {
-        "minimal": 0,
-        "medium": 2048,
-        "high": -1,
-        0: 0,
-        2048: 2048,
-        -1: -1
-    }
-    
+    budget_map = {"minimal": 0, "medium": 2048, "high": -1, 0: 0, 2048: 2048, -1: -1}
     resolved_budget = budget_map.get(thinking_budget, 2048)
 
-    if resolved_budget == 0:
-        return types.GenerateContentConfig(
-            system_instruction=SYSTEM_PROMPT,
-            temperature=0.8,
-        )
+    config_kwargs = {
+        "system_instruction": SYSTEM_PROMPT,
+        "temperature": 0.75, # گەرمی لەسەر باشترین هاوسەنگی جێگیرکرا
+        "response_mime_type": "application/json",
+        "response_schema": SubtitleResponse
+    }
 
-    # ئەگەر مۆدێلی زنجیرەی ٣ بوو، سوود لە وشەی وەکو "medium" یان "high" دەبینێت
-    if "gemini-3" in model_name:
-        level_map = {
-            0: "minimal",
-            2048: "medium",
-            -1: "high",
-            "minimal": "minimal",
-            "medium": "medium",
-            "high": "high"
-        }
-        resolved_level = level_map.get(thinking_budget, "medium")
-        thinking_config = types.ThinkingConfig(thinking_level=resolved_level)
-    else:
-        # ئەگەر مۆدێلی زنجیرەی ٢.٥ بوو، حەتمەن دەبێت ژمارەی ڕوون وەک ٢٠٤٨ بنێردرێت
-        thinking_config = types.ThinkingConfig(thinking_budget=resolved_budget)
+    if resolved_budget != 0:
+        if "gemini-3" in model_name:
+            level_map = {0: "minimal", 2048: "medium", -1: "high", "minimal": "minimal", "medium": "medium", "high": "high"}
+            resolved_level = level_map.get(thinking_budget, "medium")
+            config_kwargs["thinking_config"] = types.ThinkingConfig(thinking_level=resolved_level)
+        else:
+            config_kwargs["thinking_config"] = types.ThinkingConfig(thinking_budget=resolved_budget)
 
-    return types.GenerateContentConfig(
-        system_instruction=SYSTEM_PROMPT,
-        temperature=0.8,
-        thinking_config=thinking_config,
-    )
+    return types.GenerateContentConfig(**config_kwargs)
 
-
-def _build_user_prompt(transcript_chunk: list) -> str:
-    chunk_json = json.dumps(transcript_chunk, ensure_ascii=False, indent=2)
-    return (
-        "Translate every row below into Kurdish Sorani, following all system "
-        "rules exactly. Input transcript rows (JSON array):\n\n"
-        f"{chunk_json}"
-    )
-
-
-def _is_quota_exhausted(error_text: str) -> bool:
-    return "429" in error_text or "RESOURCE_EXHAUSTED" in error_text.upper()
-
-
-def _is_overloaded(error_text: str) -> bool:
-    upper = error_text.upper()
-    return "503" in error_text or "UNAVAILABLE" in upper or "overloaded" in error_text.lower()
-
-
-# ---------------------------------------------------------------------------
-# Main entry point
-# ---------------------------------------------------------------------------
-
-def gemini_translate(api_keys: list, current_key_index: int, transcript_chunk: list, thinking_budget: int, selected_model: str, status_msg) -> tuple[list, int]:
-    """
-    Translate a chunk of transcript rows into Kurdish Sorani using Gemini,
-    with aggressive model + API-key fallback.
-
-    Returns:
-        (translated_chunk, updated_key_index)
-    """
+# ═══════════════════════════════════════════════════════════════════
+#  مۆتۆڕی سەرەکی وەرگێڕان (Main Engine with Exponential Backoff with Jitter)
+# ═══════════════════════════════════════════════════════════════════
+def gemini_translate(api_keys: list, current_key_index: int, transcript_chunk: list, thinking_budget, selected_model: str, status_msg) -> tuple[list, int]:
     if not api_keys:
-        raise ValueError("api_keys is empty -- at least one Gemini API key is required.")
-
+        raise ValueError("api_keys is empty.")
     if not transcript_chunk:
         return [], current_key_index
 
     models_to_try = _build_model_list(selected_model)
-    user_prompt = _build_user_prompt(transcript_chunk)
+    
+    formatted_chunk = [{"start": c["start"], "end": c["end"], "text": c["text"]} for c in transcript_chunk]
+    user_prompt = f"Translate the following transcript exactly. Input array:\n\n{json.dumps(formatted_chunk, ensure_ascii=False)}"
 
     last_error = None
 
     for model_name in models_to_try:
         generation_config = _build_generation_config(thinking_budget, model_name)
+        attempt = 0
 
-        for attempt in range(1, MAX_ATTEMPTS_PER_MODEL + 1):
+        while attempt < MAX_ATTEMPTS_PER_MODEL:
             api_key = api_keys[current_key_index % len(api_keys)]
+            attempt += 1
 
             try:
                 client = genai.Client(api_key=api_key)
-
-                _log(
-                    status_msg,
-                    f"Translating with {model_name} (attempt {attempt}/{MAX_ATTEMPTS_PER_MODEL})...",
-                )
+                
+                if thinking_budget == 0 or thinking_budget == "minimal":
+                    _log(status_msg, f"⚡ [{model_name}] - وەرگێڕانی خێرا (هەوڵی {attempt}/{MAX_ATTEMPTS_PER_MODEL})...")
+                else:
+                    _log(status_msg, f"🧠 [{model_name}] - مێشکی زیرەک (هەوڵی {attempt}/{MAX_ATTEMPTS_PER_MODEL})...")
 
                 response = client.models.generate_content(
                     model=model_name,
@@ -241,16 +140,12 @@ def gemini_translate(api_keys: list, current_key_index: int, transcript_chunk: l
                     config=generation_config,
                 )
 
-                translated = extract_json(response.text or "")
+                raw_data = json.loads(response.text)
+                translated = raw_data.get("translations", [])
 
                 if len(translated) != len(transcript_chunk):
-                    raise ValueError(
-                        f"Row mismatch: expected {len(transcript_chunk)} rows, "
-                        f"got {len(translated)}."
-                    )
+                    raise ValueError("ژمارەی دێڕەکان هاوتا نییە.")
 
-                # Force-correct timestamps and punctuation as a final safety
-                # net, regardless of what the model actually returned.
                 for original, item in zip(transcript_chunk, translated):
                     item["start"] = original.get("start")
                     item["end"] = original.get("end")
@@ -259,39 +154,28 @@ def gemini_translate(api_keys: list, current_key_index: int, transcript_chunk: l
                 _log(status_msg, f"Success with {model_name}.")
                 return translated, current_key_index
 
-            except Exception as exc:  # noqa: BLE001 -- SDK error types vary by version
+            except Exception as exc:
                 last_error = exc
-                error_text = str(exc)
+                error_text = str(exc).lower()
 
-                if _is_quota_exhausted(error_text):
+                if "429" in error_text or "resource_exhausted" in error_text or "quota" in error_text:
                     current_key_index = (current_key_index + 1) % len(api_keys)
-                    _log(
-                        status_msg,
-                        f"Quota hit on {model_name}. Rotated to key index "
-                        f"{current_key_index}. Waiting {QUOTA_WAIT_SECONDS}s...",
-                    )
-                    time.sleep(QUOTA_WAIT_SECONDS)
+                    _log(status_msg, f"⚠️ کلیلەکە ماندوو بوو. گۆڕدرا بۆ کلیلی ژمارە {current_key_index + 1}...")
+                    time.sleep(1.5)
+                    continue 
+
+                if "503" in error_text or "unavailable" in error_text or "overloaded" in error_text:
+                    # بەکارهێنانی فۆرمولەی داینامیکی بیرکاری (Exponential Backoff with Jitter)
+                    wait_time = min(MAX_WAIT_TIME, (2 ** attempt) + random.uniform(0.5, 2.0))
+                    _log(status_msg, f"🔥 سێرڤەری {model_name} قەرەباڵغە! چاوەڕێ دەکەین بۆ {wait_time:.1f} چرکە...")
+                    time.sleep(wait_time)
                     continue
 
-                if _is_overloaded(error_text):
-                    _log(
-                        status_msg,
-                        f"{model_name} overloaded (attempt {attempt}/"
-                        f"{MAX_ATTEMPTS_PER_MODEL}). Staying on model, waiting "
-                        f"{OVERLOAD_WAIT_SECONDS}s...",
-                    )
-                    time.sleep(OVERLOAD_WAIT_SECONDS)
-                    continue
-
-                # Unrecognized error: brief backoff, still retry the same model.
-                _log(
-                    status_msg,
-                    f"Error on {model_name} (attempt {attempt}/"
-                    f"{MAX_ATTEMPTS_PER_MODEL}): {error_text[:200]}",
-                )
-                time.sleep(GENERIC_ERROR_WAIT_SECONDS)
+                _log(status_msg, f"⏳ کێشەیەک ڕوویدا، دووبارە تاقیدەکەینەوە... (هەوڵی {attempt})")
+                time.sleep(2)
                 continue
 
-        _log(status_msg, f"{model_name} failed {MAX_ATTEMPTS_PER_MODEL} times. Trying next model...")
+        _log(status_msg, f"⚠️ مۆدێلی {model_name} وەڵامی نەدایەوە. دەچینە سەر مۆدێلی یەدەگ...")
+        time.sleep(1)
 
-    raise RuntimeError(f"All models exhausted: {models_to_try}. Last error: {last_error}")
+    raise RuntimeError(f"All models exhausted. Last error: {last_error}")
