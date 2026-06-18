@@ -1,6 +1,5 @@
 import os
 import re
-import json
 import time
 import base64
 import shutil
@@ -10,13 +9,17 @@ import subprocess
 import streamlit as st
 import streamlit.components.v1 as components
 from faster_whisper import WhisperModel
-from google import genai
-from google.genai import types
+
+# ── هێێنانی مێشکی وەرگێڕان لە فایلەکەی کڵاودەوە ──
+from ai_translator import gemini_translate
 
 # ═══════════════════════════════════════════════════════════════════
-#  AUTO-GENERATE STREAMLIT CONFIG  (700 MB upload)
+#  AUTO-GENERATE STREAMLIT CONFIG
 # ═══════════════════════════════════════════════════════════════════
-_CFG_DIR  = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".streamlit")
+APP_DIR  = os.path.dirname(os.path.abspath(__file__))
+ROOT_DIR = os.path.dirname(APP_DIR)
+
+_CFG_DIR  = os.path.join(APP_DIR, ".streamlit")
 _CFG_FILE = os.path.join(_CFG_DIR, "config.toml")
 if not os.path.exists(_CFG_FILE):
     os.makedirs(_CFG_DIR, exist_ok=True)
@@ -24,17 +27,12 @@ if not os.path.exists(_CFG_FILE):
         _f.write("[server]\nmaxUploadSize = 700\n\n[browser]\ngatherUsageStats = false\n")
 
 # ═══════════════════════════════════════════════════════════════════
-#  CONSTANTS
+#  CONSTANTS & UTILS
 # ═══════════════════════════════════════════════════════════════════
-APP_DIR  = os.path.dirname(os.path.abspath(__file__))
-ROOT_DIR = os.path.dirname(APP_DIR)
-
 KU_FONT_FILE = "Bahij Janna-Bold.ttf"
 KU_FONT_PATH = os.path.join("/tmp", KU_FONT_FILE)
 KU_FONT_NAME = "Bahij Janna"
-
 MAX_SUB_DURATION = 4.0
-THROTTLE_SECONDS = 50
 
 MODEL_LIST = [
     "gemini-3.5-flash",
@@ -43,22 +41,12 @@ MODEL_LIST = [
     "gemini-3.1-flash-lite",
 ]
 
-_FALLBACK_EXCLUDE = {"gemini-3.1-flash-lite"}
-
 THINKING_MAP = {
-    "⚡ Ultra Fast  (بێ بیرکردنەوە)":        "minimal",
-    "⚖️ Standard / Balanced":               "medium",
+    "⚡ Ultra Fast  (بێ بیرکردنەوە)": "minimal",
+    "⚖️ Standard / Balanced": "medium",
     "🧠 Deep / Precise  (بیرکردنەوەی بەرز)": "high",
 }
 
-_BUDGET_MAP = {"minimal": 0, "medium": 2048, "high": -1}
-
-def _is_gemini3(model: str) -> bool:
-    return bool(re.match(r"gemini-3[\.\-]", model))
-
-# ═══════════════════════════════════════════════════════════════════
-#  BACKGROUND CSS
-# ═══════════════════════════════════════════════════════════════════
 def inject_background():
     bg_file = None
     for name in ("bg.png", "bg.jpg", "bg.jpeg", "bg.webp"):
@@ -72,87 +60,55 @@ def inject_background():
             b64 = base64.b64encode(f.read()).decode()
         ext = bg_file.rsplit(".", 1)[-1]
         mime = "image/jpeg" if ext in ("jpg", "jpeg") else f"image/{ext}"
-        bg_css = (
-            f"background-image: linear-gradient(rgba(0,0,0,0.88),rgba(0,0,0,0.88)),"
-            f"url('data:{mime};base64,{b64}');"
-            "background-size: cover; background-attachment: fixed;"
-        )
+        bg_css = f"background-image: linear-gradient(rgba(0,0,0,0.88),rgba(0,0,0,0.88)), url('data:{mime};base64,{b64}'); background-size: cover; background-attachment: fixed;"
     else:
         bg_css = "background-color: #121212;"
 
-    st.markdown(
-        f"""<style>
-        .stApp {{ {bg_css} }}
-        section[data-testid="stSidebar"] {{ background-color: rgba(18,18,18,0.95); }}
-        </style>""",
-        unsafe_allow_html=True,
-    )
+    st.markdown(f"<style>.stApp {{ {bg_css} }} section[data-testid='stSidebar'] {{ background-color: rgba(18,18,18,0.95); }}</style>", unsafe_allow_html=True)
 
-# ═══════════════════════════════════════════════════════════════════
-#  FONT
-# ═══════════════════════════════════════════════════════════════════
 def find_kurdish_font() -> str:
-    for path in [
-        os.path.join(APP_DIR,  KU_FONT_FILE),
-        os.path.join(ROOT_DIR, KU_FONT_FILE),
-        KU_FONT_FILE,
-        os.path.join(os.path.dirname(APP_DIR), KU_FONT_FILE),
-    ]:
+    possible_paths = [os.path.join(APP_DIR, KU_FONT_FILE), os.path.join(ROOT_DIR, KU_FONT_FILE), KU_FONT_FILE]
+    for path in possible_paths:
         if os.path.exists(path) and os.path.getsize(path) > 10_000:
             try:
                 os.makedirs("/tmp", exist_ok=True)
                 shutil.copy(path, KU_FONT_PATH)
                 return KU_FONT_NAME
-            except:
-                pass
+            except: pass
     return "Arial"
 
-# ═══════════════════════════════════════════════════════════════════
-#  TIME UTILITIES
-# ═══════════════════════════════════════════════════════════════════
 def secs(ts: str) -> float:
     try:
         ts = ts.strip().replace(",", ".")
         h, m, sf = ts.split(":")
         s, frac = (sf.split(".", 1) + ["0"])[:2]
         return int(h) * 3600 + int(m) * 60 + int(s) + float("0." + frac)
-    except Exception:
-        return 0.0
+    except: return 0.0
 
 def float_to_ass(t: float) -> str:
-    h  = int(t // 3600)
-    m  = int((t % 3600) // 60)
-    s  = int(t % 60)
-    cs = int((t - int(t)) * 100)
+    h = int(t // 3600); m = int((t % 3600) // 60); s = int(t % 60); cs = int((t - int(t)) * 100)
     return f"{h}:{m:02d}:{s:02d}.{cs:02d}"
 
-# ═══════════════════════════════════════════════════════════════════
-#  TEXT UTILITIES
-# ═══════════════════════════════════════════════════════════════════
-_PUNCT = set('؟.:!ـ؛\u201c\u201d\u2018\u2019?,;\'"!-_()[]{}،,+=*#$@^&|~`')
+def sec_to_srt(t: float) -> str:
+    h = int(t // 3600); m = int((t % 3600) // 60); s = int(t % 60); ms = int((t - int(t)) * 1000)
+    return f"{h:02d}:{m:02d}:{s:02d},{ms:03d}"
 
 def clean_punctuation(t: str) -> str:
-    return " ".join("".join(ch for ch in t if ch not in _PUNCT).split())
+    bad_chars = "؟.:!ـ؛”’?,;\"'!-_()[]{}،,+=*#$@^&|~`"
+    for char in bad_chars: t = t.replace(char, "")
+    return " ".join(t.split())
 
-_CUE_RE = re.compile(
-    r"(\d{1,2}:\d{2}:\d{2}[.,]\d{1,3})\s*-->\s*(\d{1,2}:\d{2}:\d{2}[.,]\d{1,3})\s*[|\t]\s*(.+)"
-)
+_CUE_RE = re.compile(r"(\d{1,2}:\d{2}:\d{2}[.,]\d{1,3})\s*-->\s*(\d{1,2}:\d{2}:\d{2}[.,]\d{1,3})\s*[|\t]\s*(.+)")
 
 def parse_raw_text(raw: str) -> list:
     out = []
     for line in raw.splitlines():
         m = _CUE_RE.match(line.strip())
-        if m:
-            out.append({
-                "start": m.group(1).replace(",", "."),
-                "end":   m.group(2).replace(",", "."),
-                "text":  m.group(3).strip(),
-            })
+        if m: out.append({"start": m.group(1).replace(",", "."), "end": m.group(2).replace(",", "."), "text": m.group(3).strip()})
     return out
 
 def shift_transcript(raw: str, delay: float) -> str:
-    if delay == 0.0:
-        return raw
+    if delay == 0.0: return raw
     lines = []
     for line in raw.splitlines():
         m = _CUE_RE.match(line.strip())
@@ -160,169 +116,39 @@ def shift_transcript(raw: str, delay: float) -> str:
             ns = max(0.0, secs(m.group(1)) + delay)
             ne = max(0.0, secs(m.group(2)) + delay)
             lines.append(f"{float_to_ass(ns)} --> {float_to_ass(ne)} | {m.group(3)}")
-        else:
-            lines.append(line)
+        else: lines.append(line)
     return "\n".join(lines)
-
-def extract_json(text: str):
-    text = text.strip()
-    for fence in ("```json", "```"):
-        if text.startswith(fence):
-            text = text[len(fence):]
-            break
-    if text.endswith("```"):
-        text = text[:-3]
-    text = text.strip()
-    try:
-        return json.loads(text)
-    except Exception:
-        pass
-    m = re.search(r"(\[.*\])", text, re.DOTALL)
-    if m:
-        return json.loads(m.group(1))
-    raise ValueError("JSON parse failed")
 
 def validate_cues(cues: list) -> list:
     out, cs, ce = [], 0.0, 0.0
     for c in cues:
-        try:
-            ns = float(c["start"]); ne = float(c["end"]); nt = str(c.get("text","")).strip()
-        except Exception:
-            continue
-        if not nt or ne <= ns:
-            continue
-        if ns < cs:
-            ns = ce
-        if ne <= ns:
-            continue
+        try: ns = float(c["start"]); ne = float(c["end"]); nt = str(c.get("text","")).strip()
+        except: continue
+        if not nt or ne <= ns: continue
+        if ns < cs: ns = ce
+        if ne <= ns: continue
         out.append({"start": round(ns,3), "end": round(ne,3), "text": nt})
         cs, ce = ns, ne
     return out
 
 # ═══════════════════════════════════════════════════════════════════
-#  GEMINI TRANSLATION (Pro Logic with Temp 0.8 & Cinematic Prompt)
-# ═══════════════════════════════════════════════════════════════════
-def gemini_translate(
-    api_keys: list,
-    chunk: list,
-    primary_model: str,
-    thinking_budget: int,
-) -> list:
-
-    # ── پڕۆمپتی نوێ و بەهێزکراو بۆ چارەسەری کێشەی بڕین و وەرگێڕانی خراپ ──
-    system = """تۆ باشترین، لێهاتووترین و هەستیارترین دەرهێنەری دۆبلاژ و وەرگێڕی سینەماییت لە زمانی ئینگلیزی/ژاپۆنییەوە بۆ کوردی سۆرانی.
-ئامانجی تۆ ئەوەیە وەرگێڕانێکی هێندە پاراو، زیندوو و پڕ هەست بکەیت کە بینەر هەست بکات کارەکتەرەکان خۆیان کوردن و بە زگماکی قسە دەکەن!
-
-یاساکانی وەرگێڕان (زۆر توند و نەگۆڕ):
-١. بەستنەوەی دەقەکان (Contextual Stitching): زۆرجار ڕستەکان بەهۆی خێرایی قسەکردنەوە لە چەند دێڕێکی یەک لە دوای یەکدا پچڕاون. پێش ئەوەی هەر دێڕێک وەربگێڕیت، سەیری دێڕی پێشوو و داهاتووی بکە بۆ ئەوەی مانای تەواوەتی ڕستەکە تێبگەیت. هەرگیز وەرگێڕانی حەرفی و بێ مانا مەکە بۆ ڕستە پچڕاوەکان!
-٢. وەرگێڕانی ڕۆح و مانا: مانا، هەست، و مەبەستی کارەکتەرەکە بگەیەنە. ئەگەر کارەکتەرەکە خەیاڵ دەکات یان بە کزی قسە دەکات، با وشەکان هەستیار و جوان بن.
-٣. دەستەواژە و پەندی کوردی: لەبری قسەی وشک و ڕۆبۆتی، ئیدیۆم و دەستەواژەی جوانی کوردی بەکاربهێنە کە لەگەڵ دیمەنەکە بگونجێت. (نموونە: لەبری "تۆ شێتیت"، بنووسە "مێشکت لەدەست داوە").
-٤. پاراستنی کاتەکان (Timestamps): دەبێت کلیلەکانی "start" و "end" بەبێ گۆڕینی یەک پۆینت وەک خۆیان بنووسرێنەوە. کاتەکان هێڵی سوورن!
-٥. داماڵینی خاڵبەندی: هیچ جۆرە خاڵبەندییەک (؟ . ، ! : ؛ " ' - _) لە دەقە کوردییەکەدا مەنووسە.
-٦. هاوتایی دێڕەکان: دەبێت ژمارەی دێڕەکان ڕێک یەکسان بێت بە پرسیارەکە. هیچ دێڕێک مەپەڕێنە (تەنانەت ئەگەر هەناسەدان یان چرپەش بێت).
-٧. فۆرماتی وەڵام: تەنها و تەنها لیستی JSON بنێرە، بێ هیچ قسەیەکی زیادە.
-"""
-
-    user_msg = f"Translate ALL cues perfectly to Kurdish Sorani. Remember to look at the surrounding lines to understand the full context before translating each piece:\n{json.dumps(chunk, ensure_ascii=False)}"
-
-    fallback_models = [primary_model] + [m for m in MODEL_LIST if m != primary_model and m not in _FALLBACK_EXCLUDE]
-    valid_keys = [k.strip() for k in api_keys if k and k.strip()]
-    if not valid_keys:
-        st.error("❌ هیچ کلیلێکی دروست نەدۆزرایەوە.")
-        return []
-
-    ph = st.empty()
-    key_idx = 0
-    
-    for cur_model in fallback_models:
-        attempt = 0
-        while attempt < len(valid_keys) * 2:
-            cur_key = valid_keys[key_idx % len(valid_keys)]
-            try:
-                client = genai.Client(api_key=cur_key)
-                cfg_kwargs = dict(
-                    system_instruction=system,
-                    temperature=0.8, # گەرمی کرایە 0.8 بۆ وەرگێڕانی شاز و سروشتی
-                    response_mime_type="application/json",
-                )
-                
-                budget_int = _BUDGET_MAP.get(thinking_budget, 0) if not isinstance(thinking_budget, int) else thinking_budget
-                
-                if _is_gemini3(cur_model):
-                    cfg_kwargs["thinking_config"] = types.ThinkingConfig(thinking_level=thinking_budget)
-                else:
-                    if budget_int == 0:
-                        cfg_kwargs["thinking_config"] = types.ThinkingConfig(thinking_budget=0)
-                    elif budget_int > 0:
-                        cfg_kwargs["thinking_config"] = types.ThinkingConfig(thinking_budget=budget_int)
-
-                if budget_int == 0 or thinking_budget == "minimal":
-                    ph.info(f"⚡ مۆدێلی [{cur_model}] - وەرگێڕانی خێرا بە کلیلی {key_idx+1}...")
-                else:
-                    ph.info(f"🧠 مۆدێلی [{cur_model}] - بیرکردنەوە و وەرگێڕان بە کلیلی {key_idx+1}...")
-
-                resp = client.models.generate_content(
-                    model=cur_model,
-                    contents=[user_msg],
-                    config=types.GenerateContentConfig(**cfg_kwargs),
-                )
-                data = extract_json(resp.text)
-                ph.empty()
-                if data:
-                    return data
-                    
-            except Exception as e:
-                err = str(e)
-                if any(x in err for x in ("429", "RESOURCE_EXHAUSTED", "Quota exceeded")):
-                    key_idx += 1
-                    ph.warning(f"⚠️ کلیلەکە ماندوو بوو! گۆڕدرا بۆ کلیلی {key_idx+1}...")
-                    time.sleep(2)
-                    attempt += 1
-                    continue
-                if any(x in err for x in ("503", "UNAVAILABLE", "overloaded", "demand")):
-                    ph.warning(f"⚠️ مۆدێلی {cur_model} قەرەباڵغە! دەچینە سەر مۆدێلی یەدەگ...")
-                    time.sleep(2)
-                    break 
-                
-                ph.error(f"⏳ کێشەی پەیوەندی هەیە، دووبارە تاقیدەکەینەوە...")
-                time.sleep(3)
-                attempt += 1
-                
-    ph.error("❌ هەموو هەوڵەکان بۆ ئەم بڕگەیە شکستیان هێنا بەهۆی قەرەباڵغی سێرڤەرەکانی گووگڵەوە.")
-    return []
-
-# ═══════════════════════════════════════════════════════════════════
-#  FASTER-WHISPER (Dynamic Audio Normalization Fix)
+#  FASTER-WHISPER & AUDIO
 # ═══════════════════════════════════════════════════════════════════
 @st.cache_resource
 def load_whisper():
     return WhisperModel("medium", device="cpu", compute_type="int8")
 
 def extract_audio(video_path: str, audio_path: str):
-    # بەکارهێنانی dynaudnorm بۆ ئەوەی دەنگی چرپە و خەیاڵ زۆر بە جوانی بەرز بکاتەوە
-    subprocess.run(
-        ["ffmpeg", "-y", "-i", video_path,
-         "-vn", "-ac", "1", "-ar", "16000",
-         "-af", "dynaudnorm=f=150:g=15",
-         audio_path],
-        capture_output=True, check=True,
-    )
+    subprocess.run(["ffmpeg", "-y", "-i", video_path, "-vn", "-ac", "1", "-ar", "16000", "-af", "dynaudnorm=f=150:g=15", audio_path], capture_output=True, check=True)
 
 def transcribe_audio(audio_path: str) -> list:
-    model  = load_whisper()
+    model = load_whisper()
     kwargs = dict(
-        beam_size=5,
-        word_timestamps=True,
-        vad_filter=True,
-        condition_on_previous_text=False, # ڕێگری دەکات لە گیرخواردن
-        no_speech_threshold=0.25,         # زۆر هەستیار کراوە بۆ دەنگی کز و خەیاڵ
-        compression_ratio_threshold=2.4,
-        temperature=0.0,
-        vad_parameters=dict(min_silence_duration_ms=300),
+        beam_size=5, word_timestamps=True, vad_filter=True, condition_on_previous_text=False,
+        no_speech_threshold=0.25, compression_ratio_threshold=2.4, temperature=0.0,
+        vad_parameters=dict(min_silence_duration_ms=300)
     )
-
     segments, _ = model.transcribe(audio_path, **kwargs)
-
     cues, buf, t0, t1 = [], [], None, None
 
     def flush():
@@ -335,78 +161,39 @@ def transcribe_audio(audio_path: str) -> list:
         if not seg.words:
             flush()
             seg_text = str(seg.text).strip()
-            if seg_text:
-                cues.append({
-                    "start": round(float(seg.start), 2),
-                    "end":   round(float(seg.end),   2),
-                    "text":  seg_text,
-                })
+            if seg_text: cues.append({"start": round(float(seg.start), 2), "end": round(float(seg.end), 2), "text": seg_text})
             continue
 
         for w in seg.words:
-            ws, we = float(w.start), float(w.end)
-            wt = str(w.word).strip()
-            if not wt:
-                continue
-            if t0 is None:
-                t0 = ws
-            if t1 is not None and (ws - t1) > 0.3:
-                flush()
-                t0 = ws
+            ws, we, wt = float(w.start), float(w.end), str(w.word).strip()
+            if not wt: continue
+            if t0 is None: t0 = ws
+            if t1 is not None and (ws - t1) > 0.3: flush(); t0 = ws
             buf.append(wt)
             t1 = we
-            if (we - t0 >= MAX_SUB_DURATION) or wt[-1] in ".!?؟":
-                flush()
-
+            if (we - t0 >= MAX_SUB_DURATION) or wt[-1] in ".!?؟": flush()
     flush()
     return cues
 
-# ═══════════════════════════════════════════════════════════════════
-#  CHUNK BUILDER (Safe Chunking)
-# ═══════════════════════════════════════════════════════════════════
 def build_chunks(cues: list, minutes: float) -> list:
     max_s = minutes * 60
     chunks, cur, cs = [], [], None
     for item in cues:
-        if cs is None:
-            cs = item["start"]
+        if cs is None: cs = item["start"]
         if item["end"] - cs > max_s and cur:
-            chunks.append(cur)
-            cur = [item]
-            cs = item["start"]
-        else:
-            cur.append(item)
-    if cur:
-        chunks.append(cur)
+            chunks.append(cur); cur = [item]; cs = item["start"]
+        else: cur.append(item)
+    if cur: chunks.append(cur)
     return chunks
-
-# ═══════════════════════════════════════════════════════════════════
-#  THROTTLE
-# ═══════════════════════════════════════════════════════════════════
-def throttle_countdown(seconds: int = THROTTLE_SECONDS):
-    ph = st.empty()
-    for i in range(seconds, 0, -1):
-        ph.info(f"⏳ پاراستنی سێرڤەر: {i} چرکە پشوو دەدەین...")
-        time.sleep(1)
-    ph.empty()
 
 # ═══════════════════════════════════════════════════════════════════
 #  ORCHESTRATOR 
 # ═══════════════════════════════════════════════════════════════════
-def process_full_video(
-    api_keys: list,
-    video_path: str,
-    primary_model: str,
-    thinking_budget: int,
-    chunk_minutes: float,
-    existing_raw: str = "",
-) -> str:
-
+def process_full_video(api_keys, video_path, primary_model, thinking_budget, chunk_minutes, existing_raw=""):
     last_sec = 0.0
     if existing_raw.strip():
         prev = parse_raw_text(existing_raw)
-        if prev:
-            last_sec = secs(prev[-1]["end"])
+        if prev: last_sec = secs(prev[-1]["end"])
 
     audio_path = os.path.splitext(video_path)[0] + ".wav"
 
@@ -415,42 +202,39 @@ def process_full_video(
 
     with st.spinner("📝 نووسینەوە (Whisper)..."):
         cues = transcribe_audio(audio_path)
-        try:
-            os.remove(audio_path)
-        except Exception:
-            pass
+        try: os.remove(audio_path)
+        except: pass
         if not cues:
             st.error("❌ هیچ دیالۆگێک نەدۆزرایەوە.")
             return existing_raw
 
-    with st.spinner("🧠 وەرگێڕان بۆ کوردی سۆرانی سینەمایی..."):
+    with st.spinner("🧠 وەرگێڕان بۆ کوردی سۆرانی..."):
         all_chunks = build_chunks(cues, chunk_minutes)
-
-        todo = []
-        for ch in all_chunks:
-            if not ch or ch[-1]["end"] <= last_sec:
-                continue
-            filtered = [c for c in ch if c["end"] > last_sec]
-            if filtered:
-                todo.append(filtered)
+        todo = [ch for ch in all_chunks if ch and ch[-1]["end"] > last_sec]
+        todo = [[c for c in ch if c["end"] > last_sec] for ch in todo if [c for c in ch if c["end"] > last_sec]]
 
         if not todo:
             st.info("✅ هەموو ڤیدیۆکە پێشتر وەرگێڕاوە.")
             return existing_raw
 
         total = len(todo)
-        prog  = st.progress(0, text="⏳ دەستپێکردن...")
-        new_cues: list = []
+        prog = st.progress(0, text="⏳ دەستپێکردن...")
+        new_cues, current_key_index = [], 0
+        status_msg = st.empty()
 
         for i, ch in enumerate(todo):
             chunk_label = f"بڕگەی {i+1} لە {total}"
-            
-            # ڕێژەی سەدی ڕاستەقینە
             pct = int((i / total) * 100)
             prog.progress(i / total, text=f"🔄 لە ٪{pct} ی ڤیدیۆکە تەواو بووە... ({chunk_label})")
 
-            translated = gemini_translate(
-                api_keys, ch, primary_model, thinking_budget
+            # بانگکردنی فەنکشنەکە لە فایلەکەی کڵاودەوە
+            translated, current_key_index = gemini_translate(
+                api_keys=api_keys, 
+                current_key_index=current_key_index, 
+                transcript_chunk=ch, 
+                thinking_budget=thinking_budget, 
+                selected_model=primary_model,
+                status_msg=status_msg
             )
             
             if not translated:
@@ -458,189 +242,120 @@ def process_full_video(
                 break
                 
             new_cues.extend(translated)
-            if i < total - 1:
-                throttle_countdown()
+            if i < total - 1: time.sleep(2) # پشوویەکی بچووک لە نێوان بڕگەکان
 
         prog.progress(1.0, text="🎉 لە ٪100 تەواو بوو!")
+        status_msg.empty()
 
         new_cues.sort(key=lambda x: x["start"])
         validated = validate_cues(new_cues)
 
-    lines = [
-        f"{float_to_ass(c['start'])} --> {float_to_ass(c['end'])} | {c['text']}"
-        for c in validated
-    ]
+    lines = [f"{float_to_ass(c['start'])} --> {float_to_ass(c['end'])} | {c['text']}" for c in validated]
     new_raw = "\n".join(lines)
 
-    if existing_raw.strip() and new_raw:
-        return existing_raw.rstrip() + "\n" + new_raw
+    if existing_raw.strip() and new_raw: return existing_raw.rstrip() + "\n" + new_raw
     return new_raw or existing_raw
 
 # ═══════════════════════════════════════════════════════════════════
-#  ASS BUILDER
+#  ASS BUILDER & FFMPEG
 # ═══════════════════════════════════════════════════════════════════
 def hex_to_ass(h: str) -> str:
     h = h.lstrip("#").upper().ljust(6, "0")
     return f"&H00{h[4:6]}{h[2:4]}{h[0:2]}&"
 
 def get_video_resolution(video_path: str) -> tuple:
-    """Returns (width, height) of video, defaults to (1280,720) on failure."""
     try:
-        r = subprocess.run(
-            ["ffprobe", "-v", "error", "-select_streams", "v:0",
-             "-show_entries", "stream=width,height",
-             "-of", "csv=p=0", video_path],
-            capture_output=True, text=True, check=True,
-        )
+        r = subprocess.run(["ffprobe", "-v", "error", "-select_streams", "v:0", "-show_entries", "stream=width,height", "-of", "csv=p=0", video_path], capture_output=True, text=True, check=True)
         w, h = r.stdout.strip().split(",")
         return int(w), int(h)
-    except Exception:
-        return 1280, 720
+    except: return 1280, 720
 
-def build_ass_file(
-    cues: list,
-    font_size: int,
-    wm_text: str,
-    wm_color: str,
-    wm_font_size: int,
-    wm_align: int,
-    video_path: str = "",
-) -> str:
-    fn  = find_kurdish_font()
+def build_ass_file(cues: list, font_size: int, wm_text: str, wm_color: str, wm_font_size: int, wm_align: int, video_path: str = "") -> str:
+    fn = find_kurdish_font()
     wma = hex_to_ass(wm_color)
     vw, vh = get_video_resolution(video_path) if video_path else (1280, 720)
 
     header = [
-        "[Script Info]",
-        "ScriptType: v4.00+",
-        f"PlayResX: {vw}",
-        f"PlayResY: {vh}",
-        "ScaledBorderAndShadow: yes",
-        "",
+        "[Script Info]", "ScriptType: v4.00+", f"PlayResX: {vw}", f"PlayResY: {vh}", "ScaledBorderAndShadow: yes", "",
         "[V4+ Styles]",
-        "Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, "
-        "BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, "
-        "BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding",
-        f"Style: Default,{fn},{font_size},&H00FFFFFF,&H000000FF,&H00000000,&H64000000,"
-        "-1,0,0,0,100,100,0,0,1,1.5,0,2,30,30,20,1",
-        f"Style: CornerStyle,{fn},30,&H00E0E0E0,&H000000FF,&H00000000,&H00000000,"
-        "0,0,0,0,100,100,0,0,1,1.5,0,9,20,20,20,1",
-        f"Style: WatermarkStyle,Arial,{wm_font_size},{wma},&H000000FF,&H00000000,&H00000000,"
-        "1,0,0,0,100,100,0,0,1,1.5,0,7,15,20,20,1",
-        "",
-        "[Events]",
-        "Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text",
+        "Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding",
+        f"Style: Default,{fn},{font_size},&H00FFFFFF,&H000000FF,&H00000000,&H64000000,-1,0,0,0,100,100,0,0,1,1.5,0,2,30,30,20,1",
+        f"Style: CornerStyle,{fn},30,&H00E0E0E0,&H000000FF,&H00000000,&H00000000,0,0,0,0,100,100,0,0,1,1.5,0,9,20,20,20,1",
+        f"Style: WatermarkStyle,Arial,{wm_font_size},{wma},&H000000FF,&H00000000,&H00000000,1,0,0,0,100,100,0,0,1,1.5,0,7,15,20,20,1",
+        f"Style: TranslatorStyle,{fn},40,&H0000FF00,&H000000FF,&H00000000,&H64000000,-1,0,0,0,100,100,0,0,1,1.5,0,2,30,30,20,1",
+        f"Style: TechStyle,{fn},40,&H00FFFF00,&H000000FF,&H00000000,&H64000000,-1,0,0,0,100,100,0,0,1,1.5,0,2,30,30,20,1",
+        "", "[Events]", "Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text",
     ]
 
     events = []
-    if wm_text:
-        events.append(
-            f"Dialogue: 0,0:00:00.00,9:59:59.99,WatermarkStyle,,0,0,0,,{{\\an{wm_align}}}{wm_text}"
-        )
+    if wm_text: events.append(f"Dialogue: 0,0:00:00.00,9:59:59.99,WatermarkStyle,,0,0,0,,{{\\an{wm_align}}}{wm_text}")
 
     for c in cues:
-        raw_text = c.get("text", "")
-        if "{\\" in raw_text:
-            txt = raw_text          
-        else:
-            txt = clean_punctuation(raw_text)   
+        txt = c.get("text", "")
+        if "{\\" not in txt: txt = clean_punctuation(txt)   
         a_tag = c.get("alignment_tag", "{\\an2}")
         style = c.get("style", "Default")
         events.append(f"Dialogue: 0,{c['start']},{c['end']},{style},,0,0,0,,{a_tag}{txt}")
 
     return "\n".join(header + events)
 
-# ═══════════════════════════════════════════════════════════════════
-#  FFMPEG
-# ═══════════════════════════════════════════════════════════════════
 def burn_subtitles(video: str, ass: str, out: str):
-    subprocess.run(
-        ["ffmpeg", "-y", "-i", video,
-         "-vf", f"ass={ass}:fontsdir=/tmp",
-         "-c:v", "libx264", "-preset", "veryfast", "-crf", "25",
-         "-c:a", "copy", out],
-        capture_output=True, check=True,
-    )
+    subprocess.run(["ffmpeg", "-y", "-i", video, "-vf", f"ass={ass}:fontsdir=/tmp", "-c:v", "libx264", "-preset", "veryfast", "-crf", "25", "-c:a", "copy", out], capture_output=True, check=True)
 
 def auto_dl(data: bytes, name: str, mime: str):
     b64 = base64.b64encode(data).decode()
-    components.html(
-        f'<a id="xdl" href="data:{mime};base64,{b64}" download="{name}"></a>'
-        '<script>setTimeout(()=>document.getElementById("xdl").click(),800)</script>',
-        height=0,
-    )
+    components.html(f'<a id="xdl" href="data:{mime};base64,{b64}" download="{name}"></a><script>setTimeout(()=>document.getElementById("xdl").click(),800)</script>', height=0)
 
 # ═══════════════════════════════════════════════════════════════════
 #  MAIN UI
 # ═══════════════════════════════════════════════════════════════════
 def main():
-
     def _cleanup_sub_session():
-        for k in ["sub_raw", "sub_input_path", "sub_temp_dir"]:
-            st.session_state.pop(k, None)
+        for k in ["sub_raw", "sub_input_path", "sub_temp_dir"]: st.session_state.pop(k, None)
         st.rerun()
 
     st.set_page_config(page_title="🎬 Sorani Subtitle Studio", layout="wide")
     inject_background()
     st.title("🎬 Kurdish Sorani Cinematic Subtitle Generator")
 
-    for k in ["sub_raw", "sub_input_path", "sub_temp_dir"]:
-        st.session_state.setdefault(k, None)
+    for k in ["sub_raw", "sub_input_path", "sub_temp_dir"]: st.session_state.setdefault(k, None)
 
-    # ════════════════════════════════════════════════════════════
-    #  SIDEBAR 
-    # ════════════════════════════════════════════════════════════
     with st.sidebar:
         st.header("⚙️ ڕێکخستنەکان")
-
         st.subheader("🔑 کلیلەکانی Gemini API")
-        keys = [
-            st.text_input(f"کلیلی {i+1}", type="password", key=f"key_{i}")
-            for i in range(4)
-        ]
+        keys = [st.text_input(f"کلیلی {i+1}", type="password", key=f"key_{i}") for i in range(4)]
         valid_keys = [k.strip() for k in keys if k and k.strip()]
 
         st.markdown("---")
-        primary_model = st.selectbox("🤖 مۆدێلی AI", MODEL_LIST)
-
-        thinking_label  = st.selectbox("🧠 جۆری بیرکردنەوە", list(THINKING_MAP.keys()), index=1)
+        primary_model = st.selectbox("🤖 مۆدێلی AI", MODEL_LIST, index=0)
+        thinking_label = st.selectbox("🧠 جۆری بیرکردنەوە", list(THINKING_MAP.keys()), index=1)
         thinking_budget = THINKING_MAP[thinking_label]
 
         st.markdown("---")
         chunk_minutes = st.slider("⏱️ قەبارەی پارچەکان (خولەک)", 3, 15, 4)
-
         st.markdown("---")
         font_size = st.slider("📐 قەبارەی فۆنت", 20, 80, 52)
 
-    # ════════════════════════════════════════════════════════════
-    #  MAIN AREA
-    # ════════════════════════════════════════════════════════════
-    video_file = st.file_uploader(
-        "📁 ڤیدیۆ بار بکە (MP4 / MOV / MKV / AVI / WEBM / M4V / FLV / TS / WMV)",
-        type=["mp4", "mov", "mkv", "avi", "webm", "m4v", "flv", "ts", "wmv"],
-    )
-
+    video_file = st.file_uploader("📁 ڤیدیۆ بار بکە (MP4 / MOV / MKV / AVI / WEBM / M4V / FLV / TS / WMV)", type=["mp4", "mov", "mkv", "avi", "webm", "m4v", "flv", "ts", "wmv"])
     st.markdown("---")
 
     with st.expander("ℹ️ زانیاری ناساندنی دەستپێک", expanded=False):
         c1, c2 = st.columns(2)
         with c1:
-            anime_name      = st.text_input("🎬 ناوی فیلم / زنجیرە")
+            anime_name = st.text_input("🎬 ناوی فیلم / زنجیرە")
             translator_name = st.text_input("✍️ ناوی وەرگێڕ")
         with c2:
             season_ep = st.text_input("📺 سیزن / ئەڵقە")
             tech_name = st.text_input("💻 ناوی تەکنیک")
-        intro_dur = st.number_input(
-            "⏱️ کاتی کرێدیتەکان (چرکە)", min_value=1.0, max_value=15.0, value=3.0, step=0.5
-        )
+        intro_dur = st.number_input("⏱️ کاتی کرێدیتەکان (چرکە)", min_value=1.0, max_value=15.0, value=3.0, step=0.5)
 
     with st.expander("🎨 واتەرمارک", expanded=False):
         w1, w2, w3, w4 = st.columns(4)
-        with w1: wm_text      = st.text_input("📝 نووسینی واتەرمارک")
-        with w2: wm_color     = st.color_picker("🎨 ڕەنگ", "#FFFFFF")
+        with w1: wm_text = st.text_input("📝 نووسینی واتەرمارک")
+        with w2: wm_color = st.color_picker("🎨 ڕەنگ", "#FFFFFF")
         with w3: wm_font_size = st.slider("📏 قەبارە", 10, 150, 30)
         with w4:
-            wm_pos   = st.selectbox("📍 شوێن", ["چەپ", "ڕاست"])
+            wm_pos = st.selectbox("📍 شوێن", ["چەپ", "ڕاست"])
             wm_align = 7 if wm_pos == "چەپ" else 9
 
     st.markdown("---")
@@ -648,33 +363,26 @@ def main():
     st.markdown("---")
 
     b1, b2, b3 = st.columns([3, 3, 1])
-
-    with b1:
-        start_btn = st.button("🧠 ١. دەرهێنان و وەرگێڕان", type="primary", use_container_width=True)
+    with b1: start_btn = st.button("🧠 ١. دەرهێنان و وەرگێڕان", type="primary", use_container_width=True)
     with b2:
         can_resume = bool(st.session_state.sub_raw and st.session_state.sub_input_path and os.path.exists(st.session_state.sub_input_path or ""))
         resume_btn = st.button("▶️ بەردەوام بوون", disabled=not can_resume, use_container_width=True)
-    with b3:
-        reset_btn = st.button("🔄 سفر", use_container_width=True)
+    with b3: reset_btn = st.button("🔄 سفر", use_container_width=True)
 
-    if reset_btn:
-        _cleanup_sub_session()
+    if reset_btn: _cleanup_sub_session()
 
     if start_btn:
-        if not valid_keys:
-            st.error("❌ کەمێک کلیلی Gemini بنووسە."); st.stop()
-        if not video_file:
-            st.error("❌ ڤیدیۆ بار بکە."); st.stop()
+        if not valid_keys: st.error("❌ کەمێک کلیلی Gemini بنووسە."); st.stop()
+        if not video_file: st.error("❌ ڤیدیۆ بار بکە."); st.stop()
 
         tmp = tempfile.mkdtemp()
         ext = os.path.splitext(video_file.name)[-1] or ".mp4"
         in_p = os.path.join(tmp, f"input{ext}")
-        with open(in_p, "wb") as f:
-            f.write(video_file.read())
+        with open(in_p, "wb") as f: f.write(video_file.read())
 
-        st.session_state.sub_temp_dir   = tmp
+        st.session_state.sub_temp_dir = tmp
         st.session_state.sub_input_path = in_p
-        st.session_state.sub_raw        = None
+        st.session_state.sub_raw = None
 
         result = process_full_video(valid_keys, in_p, primary_model, thinking_budget, chunk_minutes)
         if result:
@@ -682,76 +390,62 @@ def main():
             st.rerun()
 
     if resume_btn:
-        if not valid_keys:
-            st.error("❌ کلیلی Gemini نوێ بنووسە."); st.stop()
-        result = process_full_video(
-            valid_keys, st.session_state.sub_input_path, primary_model, thinking_budget, chunk_minutes, existing_raw=st.session_state.sub_raw
-        )
+        if not valid_keys: st.error("❌ کلیلی Gemini نوێ بنووسە."); st.stop()
+        result = process_full_video(valid_keys, st.session_state.sub_input_path, primary_model, thinking_budget, chunk_minutes, existing_raw=st.session_state.sub_raw)
         if result:
             st.session_state.sub_raw = result
             st.rerun()
 
     if st.session_state.sub_raw:
         st.success("✅ وەرگێڕان تەواو بوو! دەتوانیت دەسکاریی بکەیت.")
-
         displayed = shift_transcript(st.session_state.sub_raw, delay_seconds) if delay_seconds != 0.0 else st.session_state.sub_raw
         edited = st.text_area("📝 دەسکاریکردن پێش لکاندن", value=displayed, height=420)
 
         if st.button("🔥 ٢. لکاندنی ژێرنووس بە ڤیدیۆ", type="primary", use_container_width=True):
             cues = parse_raw_text(edited)
-            if not cues:
-                st.error("❌ ستەرەکان ناناسرێنەوە."); st.stop()
+            if not cues: st.error("❌ ستەرەکان ناناسرێنەوە."); st.stop()
 
-            tmp   = st.session_state.sub_temp_dir
-            in_p  = st.session_state.sub_input_path
+            tmp = st.session_state.sub_temp_dir
+            in_p = st.session_state.sub_input_path
             ass_p = os.path.join(tmp, "subs.ass")
             out_p = os.path.join(tmp, "output.mp4")
 
             intro, t = [], 0.0
-
             if anime_name:
                 label = anime_name + (f"\\N({season_ep})" if season_ep else "")
                 intro.append({"start": "0:00:00.00", "end": "0:00:15.00", "style": "CornerStyle", "alignment_tag": "{\\an9}", "text": label})
-
             if translator_name:
                 end = t + intro_dur
-                intro.append({"start": float_to_ass(t), "end": float_to_ass(end), "alignment_tag": "{\\an2}", "text": f"وەرگێڕان\\N{translator_name}"})
+                intro.append({"start": float_to_ass(t), "end": float_to_ass(end), "style": "TranslatorStyle", "alignment_tag": "{\\an2}", "text": f"وەرگێڕان\\N{translator_name}"})
                 t = end
-
             if tech_name:
                 end = t + intro_dur
-                intro.append({"start": float_to_ass(t), "end": float_to_ass(end), "alignment_tag": "{\\an2}", "text": f"تەکنیک\\N{tech_name}"})
+                intro.append({"start": float_to_ass(t), "end": float_to_ass(end), "style": "TechStyle", "alignment_tag": "{\\an2}", "text": f"تەکنیک\\N{tech_name}"})
                 t = end
 
             has_bottom = bool(translator_name or tech_name)
             for c in cues:
-                if has_bottom and secs(c["start"]) < t:
-                    c["alignment_tag"] = "{\\an8}"
-                else:
-                    c.setdefault("alignment_tag", "{\\an2}")
+                if has_bottom and secs(c["start"]) < t: c["alignment_tag"] = "{\\an8}"
+                else: c.setdefault("alignment_tag", "{\\an2}")
 
             full_cues = intro + cues
-            ass_txt   = build_ass_file(full_cues, font_size, wm_text, wm_color, wm_font_size, wm_align, video_path=in_p)
+            ass_txt = build_ass_file(full_cues, font_size, wm_text, wm_color, wm_font_size, wm_align, video_path=in_p)
 
             with open(ass_p, "w", encoding="utf-8") as f: f.write(ass_txt)
 
             with st.spinner("🔥 لکاندن (FFmpeg)..."):
-                try:
-                    burn_subtitles(in_p, ass_p, out_p)
+                try: burn_subtitles(in_p, ass_p, out_p)
                 except subprocess.CalledProcessError as e:
                     st.error(f"❌ هەڵەی FFmpeg:\n`{e.stderr.decode() if e.stderr else e}`")
                     st.stop()
 
             st.success("🎉 بە سەرکەوتوویی تەواو بوو!")
-            with open(out_p, "rb") as f:
-                vb = f.read()
-
+            with open(out_p, "rb") as f: vb = f.read()
             auto_dl(vb, "subtitled.mp4", "video/mp4")
-
+            
             d1 = st.columns(1)[0]
-            d1.download_button("⬇️ دابەزاندنی ڤیدیۆ",  vb, "subtitled.mp4", "video/mp4",  use_container_width=True)
+            d1.download_button("⬇️ دابەزاندنی ڤیدیۆ", vb, "subtitled.mp4", "video/mp4", use_container_width=True)
             st.video(vb)
-
 
 if __name__ == "__main__":
     main()
