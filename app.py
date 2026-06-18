@@ -1,18 +1,3 @@
-"""
-Kurdish Sorani Cinematic Subtitle Generator
-============================================
-Features:
-  • Background image (bg.png/bg.jpg) with dark overlay or fallback #121212
-  • 4 rotatable API keys with cascade exhaustion
-  • Model selector + thinking-mode selector
-  • Chunk-size slider (3-15 min)
-  • Whisper word-level + segment-level fallback (no silent skips)
-  • Smart Resume (continue from last translated second)
-  • Strict punctuation stripping
-  • Auto-generates .streamlit/config.toml (700 MB upload limit)
-  • _cleanup_sub_session defined inside main() → no NameError
-"""
-
 import os, re, json, time, base64, shutil, tempfile, subprocess
 
 import streamlit as st
@@ -44,12 +29,12 @@ KU_FONT_NAME = "Bahij Janna"
 MAX_SUB_DURATION = 4.0
 THROTTLE_SECONDS = 50
 
+# لادانی مۆدێلی ٢.٥ پڕۆ بە فەرمی لە لیستەکەدا
 MODEL_LIST = [
     "gemini-3.5-flash",
-    "gemini-3.1-flash-lite",
     "gemini-3-flash-preview",
     "gemini-2.5-flash",
-    "gemini-2.5-pro",
+    "gemini-3.1-flash-lite",
 ]
 
 THINKING_MAP = {
@@ -58,7 +43,6 @@ THINKING_MAP = {
     "🧠 Deep / Precise  (بیرکردنەوەی بەرز)": "high",
 }
 
-# Gemini 2.x uses thinking_budget (int); Gemini 3.x uses thinking_level (str)
 _BUDGET_MAP = {"minimal": 0, "medium": 2048, "high": -1}
 
 def _is_gemini3(model: str) -> bool:
@@ -263,7 +247,7 @@ def gemini_translate(
    • کوردمانجی یان باشووری کوردستان نەکە — تەنها سۆرانی ناوەندی.
 
 ④ جێناوەکان و کارەکتەرەکان
-   • تۆ → تۆ، من → من، ئێمە → ئێمە، ئەوان → ئەوان
+   • تۆ → تۆ, من → من، ئێمە → ئێمە، ئەوان → ئەوان
    • ناوی کەسەکان مەگۆڕە.
    • ئەگەر دوو کەس قسە دەکەن لە یەک دێڕدا، بە "/" جیابکەرەوە.
 
@@ -299,8 +283,14 @@ Output: JSON array  —  هەمان درێژی inputەکە:
 
     user_msg = f"Translate ALL cues:\n{json.dumps(chunk, ensure_ascii=False)}"
 
-    # Build fallback model list
-    fallback_models = [primary_model] + [m for m in MODEL_LIST if m != primary_model]
+    # ── مەرجی توند: ڕێگری لە گواستنەوەی خۆکار بۆ لایت مەگەر فەرمی دیاری کرابێت ──
+    fallback_models = [primary_model]
+    for m in MODEL_LIST:
+        if m != primary_model:
+            if m == "gemini-3.1-flash-lite":
+                continue  # ڕادەگیرێت و تێپەڕ دەکرێت بۆ پاراستنی کوالێتی
+            fallback_models.append(m)
+
     valid_keys = [k.strip() for k in api_keys if k and k.strip()]
     if not valid_keys:
         st.error("❌ هیچ کلیلێکی دروست نەدۆزرایەوە.")
@@ -310,7 +300,7 @@ Output: JSON array  —  هەمان درێژی inputەکە:
     key_idx   = 0   # current key index
     model_idx = 0   # current model index
 
-    for attempt in range(90):  # 30 attempts × up to 3 keys
+    for attempt in range(90):  
         cur_key   = valid_keys[key_idx   % len(valid_keys)]
         cur_model = fallback_models[model_idx % len(fallback_models)]
 
@@ -321,10 +311,9 @@ Output: JSON array  —  هەمان درێژی inputەکە:
                 temperature=0.2,
                 response_mime_type="application/json",
             )
-            # ── Thinking config: Gemini 3.x → thinking_level, Gemini 2.x → thinking_budget ──
             if _is_gemini3(cur_model):
                 cfg_kwargs["thinking_config"] = types.ThinkingConfig(
-                    thinking_level=thinking_budget   # "minimal" / "medium" / "high"
+                    thinking_level=thinking_budget   
                 )
             else:
                 budget_int = _BUDGET_MAP.get(thinking_budget, 0)
@@ -332,7 +321,6 @@ Output: JSON array  —  هەمان درێژی inputەکە:
                     cfg_kwargs["thinking_config"] = types.ThinkingConfig(thinking_budget=0)
                 elif budget_int > 0:
                     cfg_kwargs["thinking_config"] = types.ThinkingConfig(thinking_budget=budget_int)
-                # -1 → omit (let model decide)
 
             resp = client.models.generate_content(
                 model=cur_model,
@@ -347,11 +335,10 @@ Output: JSON array  —  هەمان درێژی inputەکە:
         except Exception as e:
             err = str(e)
 
-            # ── Rate-limit / quota → rotate KEY ──────────────────────
             if any(x in err for x in ("429", "RESOURCE_EXHAUSTED", "Quota exceeded")):
                 key_idx += 1
                 if key_idx >= len(valid_keys):
-                    key_idx = 0          # wrap around; wait before retry
+                    key_idx = 0          
                     ph.warning(
                         f"⚠️ هەموو کلیلەکان سنووریان تێپەڕاوە. چاوەڕێ دەکرێت... "
                         f"(هەوڵی {attempt+1})"
@@ -364,7 +351,6 @@ Output: JSON array  —  هەمان درێژی inputەکە:
                     time.sleep(3)
                 continue
 
-            # ── 503 / server overload → rotate MODEL ─────────────────
             if any(x in err for x in ("503", "UNAVAILABLE", "overloaded")):
                 model_idx += 1
                 ph.warning(
@@ -374,7 +360,6 @@ Output: JSON array  —  هەمان درێژی inputەکە:
                 time.sleep(5)
                 continue
 
-            # ── Any other error → show it; limit retries ─────────────
             ph.error(f"❌ هەڵەی نەناسراو (هەوڵی {attempt+1}/3):\n`{err}`")
             if attempt >= 2:
                 ph.empty()
@@ -392,7 +377,6 @@ def load_whisper():
     return WhisperModel("medium", device="cpu", compute_type="int8")
 
 def extract_audio(video_path: str, audio_path: str):
-    # Extract clean mono audio, normalize volume for better Whisper detection
     subprocess.run(
         ["ffmpeg", "-y", "-i", video_path,
          "-vn", "-ac", "1", "-ar", "16000",
@@ -407,10 +391,10 @@ def transcribe_audio(audio_path: str) -> list:
         beam_size=5,
         word_timestamps=True,
         vad_filter=True,
-        condition_on_previous_text=True,   # better context between segments
-        no_speech_threshold=0.4,           # catch more quiet speech
+        condition_on_previous_text=True,   
+        no_speech_threshold=0.4,           
         compression_ratio_threshold=2.4,
-        temperature=0.0,                   # deterministic = more consistent
+        temperature=0.0,                   
         vad_parameters=dict(min_silence_duration_ms=250),
     )
 
@@ -425,7 +409,6 @@ def transcribe_audio(audio_path: str) -> list:
         buf, t0, t1 = [], None, None
 
     for seg in segments:
-        # ── CRITICAL FIX: segment-level fallback when words absent ────
         if not seg.words:
             flush()
             seg_text = str(seg.text).strip()
@@ -444,13 +427,11 @@ def transcribe_audio(audio_path: str) -> list:
                 continue
             if t0 is None:
                 t0 = ws
-            # Silence gap → new cue
             if t1 is not None and (ws - t1) > 0.3:
                 flush()
                 t0 = ws
             buf.append(wt)
             t1 = we
-            # Max duration or sentence boundary
             if (we - t0 >= MAX_SUB_DURATION) or wt[-1] in ".!?؟":
                 flush()
 
@@ -496,7 +477,6 @@ def process_full_video(
     existing_raw: str = "",
 ) -> str:
 
-    # ── Resume point ──────────────────────────────────────────────
     last_sec = 0.0
     if existing_raw.strip():
         prev = parse_raw_text(existing_raw)
@@ -521,7 +501,6 @@ def process_full_video(
     with st.spinner("🧠 وەرگێڕان بۆ کوردی سۆرانی سینەمایی..."):
         all_chunks = build_chunks(cues, chunk_minutes)
 
-        # ── Smart Resume: skip done chunks, trim partial ───────────
         todo = []
         for ch in all_chunks:
             if not ch or ch[-1]["end"] <= last_sec:
@@ -536,9 +515,14 @@ def process_full_video(
 
         total = len(todo)
         prog  = st.progress(0)
+        status_text = st.empty()  # ── پیشاندانی ڕێژەی سەدی ژمارەیی ──
         new_cues: list = []
 
         for i, ch in enumerate(todo):
+            # ── نوێکردنەوەی بەردەوامی لۆگی سەدی و کاتەکان ──
+            pct = int((i / total) * 100)
+            status_text.markdown(f"### ⏳ **٪{pct} ژێرنووس کراوە...**")
+
             translated = gemini_translate(
                 api_keys, ch, primary_model, thinking_budget
             )
@@ -547,7 +531,8 @@ def process_full_video(
             if i < total - 1:
                 throttle_countdown()
 
-        new_cues.sort(key=lambda x: x["start"])
+        # ── کاتێک بە تەواوی کۆتایی دێت ──
+        status_text.markdown("### 🏆 **٪١٠٠ ژێرنووس کراوە و تەواو بوو!**")
         validated = validate_cues(new_cues)
 
     lines = [
@@ -648,18 +633,15 @@ def auto_dl(data: bytes, name: str, mime: str):
 # ═══════════════════════════════════════════════════════════════════
 def main():
 
-    # ── _cleanup_sub_session lives here → zero NameError risk ─────
     def _cleanup_sub_session():
         for k in ["sub_raw", "sub_input_path", "sub_temp_dir"]:
             st.session_state.pop(k, None)
         st.rerun()
-    # ─────────────────────────────────────────────────────────────
 
     st.set_page_config(page_title="🎬 Sorani Subtitle Studio", layout="wide")
     inject_background()
     st.title("🎬 Kurdish Sorani Cinematic Subtitle Generator")
 
-    # ── Session state init ────────────────────────────────────────
     for k in ["sub_raw", "sub_input_path", "sub_temp_dir"]:
         st.session_state.setdefault(k, None)
 
@@ -680,7 +662,7 @@ def main():
         primary_model = st.selectbox("🤖 مۆدێلی AI", MODEL_LIST)
 
         thinking_label  = st.selectbox("🧠 جۆری بیرکردنەوە", list(THINKING_MAP.keys()))
-        thinking_budget = THINKING_MAP[thinking_label]   # "minimal" / "medium" / "high"
+        thinking_budget = THINKING_MAP[thinking_label]   
 
         st.markdown("---")
         chunk_minutes = st.slider("⏱️ قەبارەی پارچەکان (خولەک)", 3, 15, 5)
