@@ -209,19 +209,21 @@ def gemini_translate(
     thinking_budget: int,
 ) -> list:
 
-    system = """تۆ لێهاتووترین، زیرەکترین و هەستیارترین دەرهێنەری دۆبلاژ و وەرگێڕی سینەماییت لە زمانی ئینگلیزییەوە بۆ کوردی سۆرانی.
+    # ── پڕۆمپتی نوێ و بەهێزکراو بۆ چارەسەری کێشەی بڕین و وەرگێڕانی خراپ ──
+    system = """تۆ باشترین، لێهاتووترین و هەستیارترین دەرهێنەری دۆبلاژ و وەرگێڕی سینەماییت لە زمانی ئینگلیزی/ژاپۆنییەوە بۆ کوردی سۆرانی.
 ئامانجی تۆ ئەوەیە وەرگێڕانێکی هێندە پاراو، زیندوو و پڕ هەست بکەیت کە بینەر هەست بکات کارەکتەرەکان خۆیان کوردن و بە زگماکی قسە دەکەن!
 
 یاساکانی وەرگێڕان (زۆر توند و نەگۆڕ):
-١. وەرگێڕانی ڕۆح و مانا: بە هیچ جۆرێک وەرگێڕانی حەرفی (وشە بە وشە) مەکە. مانا، هەست، و مەبەستی کارەکتەرەکە بگەیەنە.
-٢. دەستەواژە و پەندی کوردی: لەبری قسەی وشک و ڕۆبۆتی، ئیدیۆم و دەستەواژەی جوانی کوردی بەکاربهێنە کە لەگەڵ دیمەنەکە بگونجێت. (نموونە: لەبری "تۆ شێتیت"، بنووسە "مێشکت لەدەست داوە").
-٣. پاراستنی کاتەکان (Timestamps): دەبێت کلیلەکانی "start" و "end" بەبێ گۆڕینی یەک پۆینت وەک خۆیان بنووسرێنەوە.
-٤. داماڵینی خاڵبەندی: هیچ جۆرە خاڵبەندییەک (؟ . ، ! : ؛ " ' - _) لە دەقە کوردییەکەدا مەنووسە.
-٥. هاوتایی دێڕەکان: دەبێت ژمارەی دێڕەکان ڕێک یەکسان بێت بە پرسیارەکە. هیچ دێڕێک مەپەڕێنە (تەنانەت ئەگەر هەناسەدان یان چرپەش بێت).
-٦. فۆرماتی وەڵام: تەنها و تەنها لیستی JSON بنێرە، بێ هیچ قسەیەکی زیادە.
+١. بەستنەوەی دەقەکان (Contextual Stitching): زۆرجار ڕستەکان بەهۆی خێرایی قسەکردنەوە لە چەند دێڕێکی یەک لە دوای یەکدا پچڕاون. پێش ئەوەی هەر دێڕێک وەربگێڕیت، سەیری دێڕی پێشوو و داهاتووی بکە بۆ ئەوەی مانای تەواوەتی ڕستەکە تێبگەیت. هەرگیز وەرگێڕانی حەرفی و بێ مانا مەکە بۆ ڕستە پچڕاوەکان!
+٢. وەرگێڕانی ڕۆح و مانا: مانا، هەست، و مەبەستی کارەکتەرەکە بگەیەنە. ئەگەر کارەکتەرەکە خەیاڵ دەکات یان بە کزی قسە دەکات، با وشەکان هەستیار و جوان بن.
+٣. دەستەواژە و پەندی کوردی: لەبری قسەی وشک و ڕۆبۆتی، ئیدیۆم و دەستەواژەی جوانی کوردی بەکاربهێنە کە لەگەڵ دیمەنەکە بگونجێت. (نموونە: لەبری "تۆ شێتیت"، بنووسە "مێشکت لەدەست داوە").
+٤. پاراستنی کاتەکان (Timestamps): دەبێت کلیلەکانی "start" و "end" بەبێ گۆڕینی یەک پۆینت وەک خۆیان بنووسرێنەوە. کاتەکان هێڵی سوورن!
+٥. داماڵینی خاڵبەندی: هیچ جۆرە خاڵبەندییەک (؟ . ، ! : ؛ " ' - _) لە دەقە کوردییەکەدا مەنووسە.
+٦. هاوتایی دێڕەکان: دەبێت ژمارەی دێڕەکان ڕێک یەکسان بێت بە پرسیارەکە. هیچ دێڕێک مەپەڕێنە (تەنانەت ئەگەر هەناسەدان یان چرپەش بێت).
+٧. فۆرماتی وەڵام: تەنها و تەنها لیستی JSON بنێرە، بێ هیچ قسەیەکی زیادە.
 """
 
-    user_msg = f"Translate ALL cues perfectly to Kurdish Sorani:\n{json.dumps(chunk, ensure_ascii=False)}"
+    user_msg = f"Translate ALL cues perfectly to Kurdish Sorani. Remember to look at the surrounding lines to understand the full context before translating each piece:\n{json.dumps(chunk, ensure_ascii=False)}"
 
     fallback_models = [primary_model] + [m for m in MODEL_LIST if m != primary_model and m not in _FALLBACK_EXCLUDE]
     valid_keys = [k.strip() for k in api_keys if k and k.strip()]
@@ -232,7 +234,6 @@ def gemini_translate(
     ph = st.empty()
     key_idx = 0
     
-    # لۆجیکی نوێ: بۆ هەر مۆدێلێک، هەموو کلیلەکان تاقی دەکاتەوە پێش ئەوەی بچێتە سەر مۆدێلی یەدەگ
     for cur_model in fallback_models:
         attempt = 0
         while attempt < len(valid_keys) * 2:
@@ -281,7 +282,7 @@ def gemini_translate(
                 if any(x in err for x in ("503", "UNAVAILABLE", "overloaded", "demand")):
                     ph.warning(f"⚠️ مۆدێلی {cur_model} قەرەباڵغە! دەچینە سەر مۆدێلی یەدەگ...")
                     time.sleep(2)
-                    break # دەچێتە سەر مۆدێلی داهاتوو لە لیستی fallback_models
+                    break 
                 
                 ph.error(f"⏳ کێشەی پەیوەندی هەیە، دووبارە تاقیدەکەینەوە...")
                 time.sleep(3)
@@ -482,6 +483,20 @@ def hex_to_ass(h: str) -> str:
     h = h.lstrip("#").upper().ljust(6, "0")
     return f"&H00{h[4:6]}{h[2:4]}{h[0:2]}&"
 
+def get_video_resolution(video_path: str) -> tuple:
+    """Returns (width, height) of video, defaults to (1280,720) on failure."""
+    try:
+        r = subprocess.run(
+            ["ffprobe", "-v", "error", "-select_streams", "v:0",
+             "-show_entries", "stream=width,height",
+             "-of", "csv=p=0", video_path],
+            capture_output=True, text=True, check=True,
+        )
+        w, h = r.stdout.strip().split(",")
+        return int(w), int(h)
+    except Exception:
+        return 1280, 720
+
 def build_ass_file(
     cues: list,
     font_size: int,
@@ -489,16 +504,17 @@ def build_ass_file(
     wm_color: str,
     wm_font_size: int,
     wm_align: int,
+    video_path: str = "",
 ) -> str:
     fn  = find_kurdish_font()
     wma = hex_to_ass(wm_color)
+    vw, vh = get_video_resolution(video_path) if video_path else (1280, 720)
 
-    # ستایلی ناوەکان لێرەدا دانراوە بۆ ئەوەی لەسەر مۆبایل تێک نەچێت
     header = [
         "[Script Info]",
         "ScriptType: v4.00+",
-        "PlayResX: 1280",
-        "PlayResY: 720",
+        f"PlayResX: {vw}",
+        f"PlayResY: {vh}",
         "ScaledBorderAndShadow: yes",
         "",
         "[V4+ Styles]",
@@ -509,12 +525,8 @@ def build_ass_file(
         "-1,0,0,0,100,100,0,0,1,1.5,0,2,30,30,20,1",
         f"Style: CornerStyle,{fn},30,&H00E0E0E0,&H000000FF,&H00000000,&H00000000,"
         "0,0,0,0,100,100,0,0,1,1.5,0,9,20,20,20,1",
-        f"Style: WatermarkStyle,{fn},{wm_font_size},{wma},&H000000FF,&H00000000,&H00000000,"
-        "0,0,0,0,100,100,0,0,1,1.5,0,7,15,20,20,1",
-        f"Style: TranslatorStyle,{fn},40,&H0000FF00,&H000000FF,&H00000000,&H64000000,"
-        "-1,0,0,0,100,100,0,0,1,1.5,0,2,30,30,20,1",
-        f"Style: TechStyle,{fn},40,&H00FFFF00,&H000000FF,&H00000000,&H64000000,"
-        "-1,0,0,0,100,100,0,0,1,1.5,0,2,30,30,20,1",
+        f"Style: WatermarkStyle,Arial,{wm_font_size},{wma},&H000000FF,&H00000000,&H00000000,"
+        "1,0,0,0,100,100,0,0,1,1.5,0,7,15,20,20,1",
         "",
         "[Events]",
         "Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text",
@@ -527,7 +539,11 @@ def build_ass_file(
         )
 
     for c in cues:
-        txt   = clean_punctuation(c.get("text", ""))
+        raw_text = c.get("text", "")
+        if "{\\" in raw_text:
+            txt = raw_text          
+        else:
+            txt = clean_punctuation(raw_text)   
         a_tag = c.get("alignment_tag", "{\\an2}")
         style = c.get("style", "Default")
         events.append(f"Dialogue: 0,{c['start']},{c['end']},{style},,0,0,0,,{a_tag}{txt}")
@@ -572,7 +588,7 @@ def main():
         st.session_state.setdefault(k, None)
 
     # ════════════════════════════════════════════════════════════
-    #  SIDEBAR (دیزاینەکەی کڵاود)
+    #  SIDEBAR 
     # ════════════════════════════════════════════════════════════
     with st.sidebar:
         st.header("⚙️ ڕێکخستنەکان")
@@ -692,16 +708,19 @@ def main():
             out_p = os.path.join(tmp, "output.mp4")
 
             intro, t = [], 0.0
+
             if anime_name:
                 label = anime_name + (f"\\N({season_ep})" if season_ep else "")
                 intro.append({"start": "0:00:00.00", "end": "0:00:15.00", "style": "CornerStyle", "alignment_tag": "{\\an9}", "text": label})
+
             if translator_name:
                 end = t + intro_dur
-                intro.append({"start": float_to_ass(t), "end": float_to_ass(end), "style": "TranslatorStyle", "alignment_tag": "{\\an2}", "text": f"وەرگێڕان\\N{translator_name}"})
+                intro.append({"start": float_to_ass(t), "end": float_to_ass(end), "alignment_tag": "{\\an2}", "text": f"وەرگێڕان\\N{translator_name}"})
                 t = end
+
             if tech_name:
                 end = t + intro_dur
-                intro.append({"start": float_to_ass(t), "end": float_to_ass(end), "style": "TechStyle", "alignment_tag": "{\\an2}", "text": f"تەکنیک\\N{tech_name}"})
+                intro.append({"start": float_to_ass(t), "end": float_to_ass(end), "alignment_tag": "{\\an2}", "text": f"تەکنیک\\N{tech_name}"})
                 t = end
 
             has_bottom = bool(translator_name or tech_name)
@@ -712,7 +731,7 @@ def main():
                     c.setdefault("alignment_tag", "{\\an2}")
 
             full_cues = intro + cues
-            ass_txt   = build_ass_file(full_cues, font_size, wm_text, wm_color, wm_font_size, wm_align)
+            ass_txt   = build_ass_file(full_cues, font_size, wm_text, wm_color, wm_font_size, wm_align, video_path=in_p)
 
             with open(ass_p, "w", encoding="utf-8") as f: f.write(ass_txt)
 
@@ -728,11 +747,11 @@ def main():
                 vb = f.read()
 
             auto_dl(vb, "subtitled.mp4", "video/mp4")
-            
-            # تەنها دوگمەی دابەزاندنی ڤیدیۆ وەک داوات کردبوو
+
             d1 = st.columns(1)[0]
             d1.download_button("⬇️ دابەزاندنی ڤیدیۆ",  vb, "subtitled.mp4", "video/mp4",  use_container_width=True)
             st.video(vb)
+
 
 if __name__ == "__main__":
     main()
