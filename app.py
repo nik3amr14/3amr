@@ -1,6 +1,5 @@
 import os
 import re
-import json
 import time
 import base64
 import shutil
@@ -41,6 +40,15 @@ MODEL_LIST = [
     "gemini-2.5-flash",
     "gemini-3.1-flash-lite",
 ]
+
+# لیستی زمانەکان بۆ چارەسەری کێشەی مۆسیقای باکگراوند [25]
+LANG_MAP = {
+    "Auto-Detect (خۆکار)": None,
+    "Japanese (ژاپۆنی)": "ja",
+    "English (ئینگلیزی)": "en",
+    "Persian (فارسی)": "fa",
+    "Arabic (عەرەبی)": "ar"
+}
 
 THINKING_MAP = {
     "⚡ Ultra Fast  (بێ بیرکردنەوە)": "minimal",
@@ -138,28 +146,25 @@ def load_whisper():
 def extract_audio(video_path: str, audio_path: str):
     subprocess.run(["ffmpeg", "-y", "-i", video_path, "-vn", "-ac", "1", "-ar", "16000", "-af", "dynaudnorm=f=150:g=15", audio_path], capture_output=True, check=True)
 
-def transcribe_audio(audio_path: str) -> list:
+def transcribe_audio(audio_path: str, selected_lang: str = None) -> list:
     model = load_whisper()
     
-    # 🌐 قۆناغی یەکەم: پشکنینی خێرا بۆ ئاشکراکردن و قفڵکردنی زمانی ڤیدیۆکە [25]
-    _, info = model.transcribe(audio_path, beam_size=1)
-    detected_lang = info.language
-    lang_prob = info.language_probability
+    # قفڵکردنی زمان ئەگەر بە دەستی دیاری کرابێت، ئەگەرنا بە ئۆتۆماتیکی دەیدۆزێتەوە [25]
+    if not selected_lang:
+        _, info = model.transcribe(audio_path, beam_size=1)
+        detected_lang = info.language
+        lang_prob = info.language_probability
+        st.info(f"🌐 زمانی زاڵی ڤیدیۆکە بە خۆکاری ئاشکرا کرا: **[{detected_lang.upper()}]** (بڕواپێکراوی: {int(lang_prob*100)}٪)")
+        final_lang = detected_lang
+    else:
+        st.info(f"🌐 زمانەکە بە دەستی قوفڵ کراوە لەسەر: **[{selected_lang.upper()}]**")
+        final_lang = selected_lang
     
-    # پیشاندانی زانیاری زمانە ئاشکراکراوەکە بە بەکارهێنەر
-    st.info(f"🌐 زمانی سەرەکی ڤیدیۆکە بە خۆکاری ئاشکرا کرا: **[{detected_lang.upper()}]** (بڕواپێکراوی: {int(lang_prob*100)}٪)")
-    
-    # 🌐 قۆناغی دووەم: نووسینەوەی تەواو بە قفڵکردنی زمانەکە بۆ ئەوەی مۆسیقای باکگراوند سەرلێشێواوی دروست نەکات [25]
     kwargs = dict(
-        beam_size=5, 
-        word_timestamps=True, 
-        vad_filter=True, 
-        condition_on_previous_text=False,
-        no_speech_threshold=0.25, 
-        compression_ratio_threshold=2.4, 
-        temperature=0.0,
+        beam_size=5, word_timestamps=True, vad_filter=True, condition_on_previous_text=False,
+        no_speech_threshold=0.25, compression_ratio_threshold=2.4, temperature=0.0,
         vad_parameters=dict(min_silence_duration_ms=300),
-        language=detected_lang # قفڵکردنی زمانی دۆزراوە بۆ ڕێگریکردن لە لادان [25]
+        language=final_lang # قفڵکردنی زمان بۆ ئەوەی لێی تێکنەچێت [25]
     )
     segments, _ = model.transcribe(audio_path, **kwargs)
     cues, buf, t0, t1 = [], [], None, None
@@ -202,7 +207,7 @@ def build_chunks(cues: list, minutes: float) -> list:
 # ═══════════════════════════════════════════════════════════════════
 #  ORCHESTRATOR 
 # ═══════════════════════════════════════════════════════════════════
-def process_full_video(api_keys, video_path, primary_model, thinking_budget, chunk_minutes, existing_raw=""):
+def process_full_video(api_keys, video_path, primary_model, thinking_budget, chunk_minutes, selected_lang=None, existing_raw=""):
     last_sec = 0.0
     if existing_raw.strip():
         prev = parse_raw_text(existing_raw)
@@ -214,7 +219,7 @@ def process_full_video(api_keys, video_path, primary_model, thinking_budget, chu
         extract_audio(video_path, audio_path)
 
     with st.spinner("📝 نووسینەوە (Whisper)..."):
-        cues = transcribe_audio(audio_path)
+        cues = transcribe_audio(audio_path, selected_lang=selected_lang)
         try: os.remove(audio_path)
         except: pass
         if not cues:
@@ -328,7 +333,7 @@ def main():
 
     st.set_page_config(page_title="🎬 Sorani Subtitle Studio", layout="wide")
     inject_background()
-    st.title("🎬 Kurdish Sorani Cinematic Subtitle Generator")
+    st.title("🎬 Kurdish Sorani Subtitle Generator")
 
     for k in ["sub_raw", "sub_input_path", "sub_temp_dir"]: st.session_state.setdefault(k, None)
 
@@ -342,6 +347,17 @@ def main():
         primary_model = st.selectbox("🤖 مۆدێلی AI", MODEL_LIST, index=0)
         thinking_label = st.selectbox("🧠 جۆری بیرکردنەوە", list(THINKING_MAP.keys()), index=1)
         thinking_budget = THINKING_MAP[thinking_label]
+
+        # 🌐 زیادکردنی بەشی هەڵبژاردنی زمان لە سایدباردا [25]
+        st.markdown("---")
+        st.subheader("🌐 زمانی ڤیدیۆکە")
+        lang_choice = st.selectbox(
+            "زمانەکە بە دەستی دیاری بکە (بۆ ڕێگری لە لۆدی مۆسیقای تیکتۆک):",
+            list(LANG_MAP.keys()),
+            index=0,
+            help="ئەگەر ڤیدیۆکەت مۆسیقای یەکجار بەرزی لەسەرە، لێرەوە زمانەکەی بە دەستی قوفڵ بکە تا تووشی هیچ هەڵەیەک نەبیت."
+        )
+        selected_lang = LANG_MAP[lang_choice]
 
         st.markdown("---")
         chunk_minutes = st.slider("⏱️ قەبارەی پارچەکان (خولەک)", 3, 15, 4)
@@ -396,14 +412,14 @@ def main():
         st.session_state.sub_input_path = in_p
         st.session_state.sub_raw = None
 
-        result = process_full_video(valid_keys, in_p, primary_model, thinking_budget, chunk_minutes)
+        result = process_full_video(valid_keys, in_p, primary_model, thinking_budget, chunk_minutes, selected_lang=selected_lang)
         if result:
             st.session_state.sub_raw = result
             st.rerun()
 
     if resume_btn:
         if not valid_keys: st.error("❌ کلیلی Gemini نوێ بنووسە."); st.stop()
-        result = process_full_video(valid_keys, st.session_state.sub_input_path, primary_model, thinking_budget, chunk_minutes, existing_raw=st.session_state.sub_raw)
+        result = process_full_video(valid_keys, st.session_state.sub_input_path, primary_model, thinking_budget, chunk_minutes, selected_lang=selected_lang, existing_raw=st.session_state.sub_raw)
         if result:
             st.session_state.sub_raw = result
             st.rerun()
