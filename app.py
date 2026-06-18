@@ -1,3 +1,4 @@
+
 """
 Kurdish Sorani Cinematic Subtitle Generator
 ============================================
@@ -398,11 +399,10 @@ def load_whisper():
     return WhisperModel("medium", device="cpu", compute_type="int8")
 
 def extract_audio(video_path: str, audio_path: str):
-    # Extract clean mono audio, normalize volume for better Whisper detection
+    # Simple clean extraction — loudnorm removed (distorts early speech)
     subprocess.run(
         ["ffmpeg", "-y", "-i", video_path,
          "-vn", "-ac", "1", "-ar", "16000",
-         "-af", "loudnorm=I=-16:TP=-1.5:LRA=11",
          audio_path],
         capture_output=True, check=True,
     )
@@ -553,19 +553,48 @@ def process_full_video(
         total = len(todo)
         prog  = st.progress(0, text="⏳ دەستپێکردن...")
         new_cues: list = []
+        failed_chunks: list = []
 
         for i, ch in enumerate(todo):
-            translated = gemini_translate(
-                api_keys, ch, primary_model, thinking_budget
-            )
-            new_cues.extend(translated)
+            chunk_label = f"پارچەی {i+1} لە {total}"
+            translated = []
+
+            # ── Chunk-level retry: max 3 attempts ──────────────────────
+            for retry in range(3):
+                translated = gemini_translate(
+                    api_keys, ch, primary_model, thinking_budget
+                )
+                if translated:
+                    break
+                if retry < 2:
+                    st.warning(
+                        f"⚠️ {chunk_label} بەتاڵ گەڕایەوە — "
+                        f"هەوڵی {retry+2}/3 دەدەین..."
+                    )
+                    time.sleep(10)
+
+            if translated:
+                new_cues.extend(translated)
+            else:
+                failed_chunks.append(i + 1)
+                st.error(
+                    f"❌ {chunk_label} سێ جار هەوڵی دراوە و سەرکەوتوو نەبوو — "
+                    f"بەردەوام بوون لە پارچەی داهاتوو..."
+                )
+
             pct = round((i + 1) / total * 100)
             prog.progress(
                 (i + 1) / total,
-                text=f"🔄 {pct}% کراوە — پارچەی {i+1} لە {total}"
+                text=f"🔄 {pct}% کراوە — {chunk_label}"
             )
             if i < total - 1:
                 throttle_countdown()
+
+        if failed_chunks:
+            st.warning(
+                f"⚠️ ئەم پارچانە وەرگێڕانیان نەبوو: {failed_chunks}  "
+                f"— دەتوانیت بە 'بەردەوام بوون' دیسان هەوڵ بدەیت."
+            )
 
         new_cues.sort(key=lambda x: x["start"])
         validated = validate_cues(new_cues)
