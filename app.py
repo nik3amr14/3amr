@@ -1,5 +1,6 @@
 import os
 import re
+import json
 import time
 import base64
 import shutil
@@ -14,7 +15,7 @@ from faster_whisper import WhisperModel
 from ai_translator import gemini_translate
 
 # ═══════════════════════════════════════════════════════════════════
-#  AUTO-GENERATE STREAMLIT CONFIG
+#  AUTO-GENERATE STREAMLIT CONFIG  (700 MB upload)
 # ═══════════════════════════════════════════════════════════════════
 APP_DIR  = os.path.dirname(os.path.abspath(__file__))
 ROOT_DIR = os.path.dirname(APP_DIR)
@@ -89,10 +90,6 @@ def float_to_ass(t: float) -> str:
     h = int(t // 3600); m = int((t % 3600) // 60); s = int(t % 60); cs = int((t - int(t)) * 100)
     return f"{h}:{m:02d}:{s:02d}.{cs:02d}"
 
-def sec_to_srt(t: float) -> str:
-    h = int(t // 3600); m = int((t % 3600) // 60); s = int(t % 60); ms = int((t - int(t)) * 1000)
-    return f"{h:02d}:{m:02d}:{s:02d},{ms:03d}"
-
 def clean_punctuation(t: str) -> str:
     bad_chars = "؟.:!ـ؛”’?,;\"'!-_()[]{}،,+=*#$@^&|~`"
     for char in bad_chars: t = t.replace(char, "")
@@ -132,7 +129,7 @@ def validate_cues(cues: list) -> list:
     return out
 
 # ═══════════════════════════════════════════════════════════════════
-#  FASTER-WHISPER & AUDIO
+#  FASTER-WHISPER & AUDIO (Auto-Language Detection & Locking)
 # ═══════════════════════════════════════════════════════════════════
 @st.cache_resource
 def load_whisper():
@@ -143,10 +140,26 @@ def extract_audio(video_path: str, audio_path: str):
 
 def transcribe_audio(audio_path: str) -> list:
     model = load_whisper()
+    
+    # 🌐 قۆناغی یەکەم: پشکنینی خێرا بۆ ئاشکراکردن و قفڵکردنی زمانی ڤیدیۆکە [25]
+    _, info = model.transcribe(audio_path, beam_size=1)
+    detected_lang = info.language
+    lang_prob = info.language_probability
+    
+    # پیشاندانی زانیاری زمانە ئاشکراکراوەکە بە بەکارهێنەر
+    st.info(f"🌐 زمانی سەرەکی ڤیدیۆکە بە خۆکاری ئاشکرا کرا: **[{detected_lang.upper()}]** (بڕواپێکراوی: {int(lang_prob*100)}٪)")
+    
+    # 🌐 قۆناغی دووەم: نووسینەوەی تەواو بە قفڵکردنی زمانەکە بۆ ئەوەی مۆسیقای باکگراوند سەرلێشێواوی دروست نەکات [25]
     kwargs = dict(
-        beam_size=5, word_timestamps=True, vad_filter=True, condition_on_previous_text=False,
-        no_speech_threshold=0.25, compression_ratio_threshold=2.4, temperature=0.0,
-        vad_parameters=dict(min_silence_duration_ms=300)
+        beam_size=5, 
+        word_timestamps=True, 
+        vad_filter=True, 
+        condition_on_previous_text=False,
+        no_speech_threshold=0.25, 
+        compression_ratio_threshold=2.4, 
+        temperature=0.0,
+        vad_parameters=dict(min_silence_duration_ms=300),
+        language=detected_lang # قفڵکردنی زمانی دۆزراوە بۆ ڕێگریکردن لە لادان [25]
     )
     segments, _ = model.transcribe(audio_path, **kwargs)
     cues, buf, t0, t1 = [], [], None, None
@@ -205,7 +218,7 @@ def process_full_video(api_keys, video_path, primary_model, thinking_budget, chu
         try: os.remove(audio_path)
         except: pass
         if not cues:
-            st.error("❌ هیچ دیالۆگێک نەدۆزرایەوە.")
+            st.error("❌ هیچ دیالۆگێک لە ڤیدیۆکەدا نەدۆزرایەوە.")
             return existing_raw
 
     with st.spinner("🧠 وەرگێڕان بۆ کوردی سۆرانی..."):
@@ -242,7 +255,7 @@ def process_full_video(api_keys, video_path, primary_model, thinking_budget, chu
                 break
                 
             new_cues.extend(translated)
-            if i < total - 1: time.sleep(2) # پشوویەکی بچووک لە نێوان بڕگەکان
+            if i < total - 1: time.sleep(2)
 
         prog.progress(1.0, text="🎉 لە ٪100 تەواو بوو!")
         status_msg.empty()
@@ -291,8 +304,7 @@ def build_ass_file(cues: list, font_size: int, wm_text: str, wm_color: str, wm_f
     if wm_text: events.append(f"Dialogue: 0,0:00:00.00,9:59:59.99,WatermarkStyle,,0,0,0,,{{\\an{wm_align}}}{wm_text}")
 
     for c in cues:
-        txt = c.get("text", "")
-        if "{\\" not in txt: txt = clean_punctuation(txt)   
+        txt   = clean_punctuation(c.get("text", ""))
         a_tag = c.get("alignment_tag", "{\\an2}")
         style = c.get("style", "Default")
         events.append(f"Dialogue: 0,{c['start']},{c['end']},{style},,0,0,0,,{a_tag}{txt}")
@@ -306,9 +318,9 @@ def auto_dl(data: bytes, name: str, mime: str):
     b64 = base64.b64encode(data).decode()
     components.html(f'<a id="xdl" href="data:{mime};base64,{b64}" download="{name}"></a><script>setTimeout(()=>document.getElementById("xdl").click(),800)</script>', height=0)
 
-# ═══════════════════════════════════════════════════════════════════
+# ══════════════════════════════════════════════════════════
 #  MAIN UI
-# ═══════════════════════════════════════════════════════════════════
+# ══════════════════════════════════════════════════════════
 def main():
     def _cleanup_sub_session():
         for k in ["sub_raw", "sub_input_path", "sub_temp_dir"]: st.session_state.pop(k, None)
