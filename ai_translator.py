@@ -1,26 +1,9 @@
-"""
-ai_translator.py
-=================
-
-Standalone translation module for the Kurdish Sorani Cinematic Subtitle
-Generator.
-
-This module owns ALL Gemini API interaction for subtitle translation:
-  - the cinematic Kurdish Sorani system prompt
-  - calling the Gemini API with model + API-key fallback ("aggressive forcing")
-  - building the correct ThinkingConfig per model family
-  - robustly parsing the raw JSON array Gemini returns
-
-No other concern (UI, FFmpeg, file I/O) lives in this file.
-"""
-
 import json
 import re
 import time
 
 from google import genai
 from google.genai import types
-
 
 # ---------------------------------------------------------------------------
 # Configuration constants
@@ -154,19 +137,41 @@ def _build_model_list(selected_model: str) -> list:
 
 
 def _build_generation_config(thinking_budget, model_name: str):
-    """Build the GenerateContentConfig for a given model + thinking budget."""
-    if thinking_budget == 0:
+    """Build the GenerateContentConfig with corrected model parameters."""
+    
+    # مەپکردنی بەهای ئاستەکان بە جۆری جیاوازی مۆدێلەکان
+    budget_map = {
+        "minimal": 0,
+        "medium": 2048,
+        "high": -1,
+        0: 0,
+        2048: 2048,
+        -1: -1
+    }
+    
+    resolved_budget = budget_map.get(thinking_budget, 2048)
+
+    if resolved_budget == 0:
         return types.GenerateContentConfig(
             system_instruction=SYSTEM_PROMPT,
             temperature=0.8,
         )
 
+    # ئەگەر مۆدێلی زنجیرەی ٣ بوو، سوود لە وشەی وەکو "medium" یان "high" دەبینێت
     if "gemini-3" in model_name:
-        # Gemini 3 family uses a qualitative thinking level, e.g. "low"/"medium"/"high".
-        thinking_config = types.ThinkingConfig(thinking_level=thinking_budget)
+        level_map = {
+            0: "minimal",
+            2048: "medium",
+            -1: "high",
+            "minimal": "minimal",
+            "medium": "medium",
+            "high": "high"
+        }
+        resolved_level = level_map.get(thinking_budget, "medium")
+        thinking_config = types.ThinkingConfig(thinking_level=resolved_level)
     else:
-        # Gemini 2 family uses a numeric thinking token budget, e.g. 2048.
-        thinking_config = types.ThinkingConfig(thinking_budget=thinking_budget)
+        # ئەگەر مۆدێلی زنجیرەی ٢.٥ بوو، حەتمەن دەبێت ژمارەی ڕوون وەک ٢٠٤٨ بنێردرێت
+        thinking_config = types.ThinkingConfig(thinking_budget=resolved_budget)
 
     return types.GenerateContentConfig(
         system_instruction=SYSTEM_PROMPT,
