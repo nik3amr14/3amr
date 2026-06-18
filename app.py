@@ -1,3 +1,18 @@
+"""
+Kurdish Sorani Cinematic Subtitle Generator
+============================================
+Features:
+  • Background image (bg.png/bg.jpg) with dark overlay or fallback #121212
+  • 4 rotatable API keys with cascade exhaustion
+  • Model selector + thinking-mode selector
+  • Chunk-size slider (3-15 min)
+  • Whisper word-level + segment-level fallback (no silent skips)
+  • Smart Resume (continue from last translated second)
+  • Strict punctuation stripping
+  • Auto-generates .streamlit/config.toml (700 MB upload limit)
+  • _cleanup_sub_session defined inside main() → no NameError
+"""
+
 import os, re, json, time, base64, shutil, tempfile, subprocess
 
 import streamlit as st
@@ -29,13 +44,15 @@ KU_FONT_NAME = "Bahij Janna"
 MAX_SUB_DURATION = 4.0
 THROTTLE_SECONDS = 50
 
-# لادانی مۆدێلی ٢.٥ پڕۆ بە فەرمی لە لیستەکەدا
 MODEL_LIST = [
-    "gemini-3.5-flash",
+    "gemini-3.5-flash",        # ✅ باشترین هەڵبژاردن
     "gemini-3-flash-preview",
     "gemini-2.5-flash",
-    "gemini-3.1-flash-lite",
+    "gemini-3.1-flash-lite",   # ⚠️  تەنها دەستی خۆت هەڵیبژێرە
 ]
+
+# ئەم مۆدێلە خۆکار بەکار ناهێنرێت بە Fallback
+_FALLBACK_EXCLUDE = {"gemini-3.1-flash-lite"}
 
 THINKING_MAP = {
     "⚡ Ultra Fast  (بێ بیرکردنەوە)":        "minimal",
@@ -43,6 +60,7 @@ THINKING_MAP = {
     "🧠 Deep / Precise  (بیرکردنەوەی بەرز)": "high",
 }
 
+# Gemini 2.x uses thinking_budget (int); Gemini 3.x uses thinking_level (str)
 _BUDGET_MAP = {"minimal": 0, "medium": 2048, "high": -1}
 
 def _is_gemini3(model: str) -> bool:
@@ -247,14 +265,15 @@ def gemini_translate(
    • کوردمانجی یان باشووری کوردستان نەکە — تەنها سۆرانی ناوەندی.
 
 ④ جێناوەکان و کارەکتەرەکان
-   • تۆ → تۆ, من → من، ئێمە → ئێمە، ئەوان → ئەوان
+   • تۆ → تۆ، من → من، ئێمە → ئێمە، ئەوان → ئەوان
    • ناوی کەسەکان مەگۆڕە.
    • ئەگەر دوو کەس قسە دەکەن لە یەک دێڕدا، بە "/" جیابکەرەوە.
 
-⑤ قەدری ژێرنووس
+⑤ قەدری ژێرنووس و دیالۆگی نێوخۆیی
    • هیچ دێڕێک مەپەڕێنە — هەتا دەنگی کەسێک دەبیستریت، دەبێت وەربگێڕدرێت.
+   • دیالۆگی نێوخۆیی (خەیاڵ، بیرکردنەوە، داهاتوو)  →  وەرگێڕی بێ هیچ جیاوازی.
+   • دەنگی کارەکتەری دووەم، باچکە، پشتزمین  →  هەموویان وەربگێڕە.
    • ژێرنووس دەبێت کورت و دروستەوەبێت — نەک درێژ و قرووقلی.
-   • ئەگەر دەقی سەرچاوە زۆر درێژە، بیی بۆ ٢ یان ٣ دانەی کورتتر بشکێنە.
 
 ⑥ کاتەکان بپارێزە
    • "start" و "end" بە تەواوی وەک خۆیان بهێڵەوە — هیچ دەستکارییان مەکە.
@@ -283,14 +302,11 @@ Output: JSON array  —  هەمان درێژی inputەکە:
 
     user_msg = f"Translate ALL cues:\n{json.dumps(chunk, ensure_ascii=False)}"
 
-    # ── مەرجی توند: ڕێگری لە گواستنەوەی خۆکار بۆ لایت مەگەر فەرمی دیاری کرابێت ──
-    fallback_models = [primary_model]
-    for m in MODEL_LIST:
-        if m != primary_model:
-            if m == "gemini-3.1-flash-lite":
-                continue  # ڕادەگیرێت و تێپەڕ دەکرێت بۆ پاراستنی کوالێتی
-            fallback_models.append(m)
-
+    # Build fallback model list — exclude lite model from auto-rotation
+    fallback_models = [primary_model] + [
+        m for m in MODEL_LIST
+        if m != primary_model and m not in _FALLBACK_EXCLUDE
+    ]
     valid_keys = [k.strip() for k in api_keys if k and k.strip()]
     if not valid_keys:
         st.error("❌ هیچ کلیلێکی دروست نەدۆزرایەوە.")
@@ -300,7 +316,7 @@ Output: JSON array  —  هەمان درێژی inputەکە:
     key_idx   = 0   # current key index
     model_idx = 0   # current model index
 
-    for attempt in range(90):  
+    for attempt in range(90):  # 30 attempts × up to 3 keys
         cur_key   = valid_keys[key_idx   % len(valid_keys)]
         cur_model = fallback_models[model_idx % len(fallback_models)]
 
@@ -311,9 +327,10 @@ Output: JSON array  —  هەمان درێژی inputەکە:
                 temperature=0.2,
                 response_mime_type="application/json",
             )
+            # ── Thinking config: Gemini 3.x → thinking_level, Gemini 2.x → thinking_budget ──
             if _is_gemini3(cur_model):
                 cfg_kwargs["thinking_config"] = types.ThinkingConfig(
-                    thinking_level=thinking_budget   
+                    thinking_level=thinking_budget   # "minimal" / "medium" / "high"
                 )
             else:
                 budget_int = _BUDGET_MAP.get(thinking_budget, 0)
@@ -321,6 +338,7 @@ Output: JSON array  —  هەمان درێژی inputەکە:
                     cfg_kwargs["thinking_config"] = types.ThinkingConfig(thinking_budget=0)
                 elif budget_int > 0:
                     cfg_kwargs["thinking_config"] = types.ThinkingConfig(thinking_budget=budget_int)
+                # -1 → omit (let model decide)
 
             resp = client.models.generate_content(
                 model=cur_model,
@@ -335,10 +353,11 @@ Output: JSON array  —  هەمان درێژی inputەکە:
         except Exception as e:
             err = str(e)
 
+            # ── Rate-limit / quota → rotate KEY ──────────────────────
             if any(x in err for x in ("429", "RESOURCE_EXHAUSTED", "Quota exceeded")):
                 key_idx += 1
                 if key_idx >= len(valid_keys):
-                    key_idx = 0          
+                    key_idx = 0          # wrap around; wait before retry
                     ph.warning(
                         f"⚠️ هەموو کلیلەکان سنووریان تێپەڕاوە. چاوەڕێ دەکرێت... "
                         f"(هەوڵی {attempt+1})"
@@ -351,6 +370,7 @@ Output: JSON array  —  هەمان درێژی inputەکە:
                     time.sleep(3)
                 continue
 
+            # ── 503 / server overload → rotate MODEL ─────────────────
             if any(x in err for x in ("503", "UNAVAILABLE", "overloaded")):
                 model_idx += 1
                 ph.warning(
@@ -360,6 +380,7 @@ Output: JSON array  —  هەمان درێژی inputەکە:
                 time.sleep(5)
                 continue
 
+            # ── Any other error → show it; limit retries ─────────────
             ph.error(f"❌ هەڵەی نەناسراو (هەوڵی {attempt+1}/3):\n`{err}`")
             if attempt >= 2:
                 ph.empty()
@@ -377,6 +398,7 @@ def load_whisper():
     return WhisperModel("medium", device="cpu", compute_type="int8")
 
 def extract_audio(video_path: str, audio_path: str):
+    # Extract clean mono audio, normalize volume for better Whisper detection
     subprocess.run(
         ["ffmpeg", "-y", "-i", video_path,
          "-vn", "-ac", "1", "-ar", "16000",
@@ -391,11 +413,21 @@ def transcribe_audio(audio_path: str) -> list:
         beam_size=5,
         word_timestamps=True,
         vad_filter=True,
-        condition_on_previous_text=True,   
-        no_speech_threshold=0.4,           
-        compression_ratio_threshold=2.4,
-        temperature=0.0,                   
-        vad_parameters=dict(min_silence_duration_ms=250),
+        condition_on_previous_text=True,
+        # ── پەست کردنی threshold بۆ دەستگیرکردنی قسەی خەیاڵ و داهاتوو ──
+        no_speech_threshold=0.2,          # کرا بۆ 0.2 (پێشتر 0.4) — قسەی کەمیش دەگرێت
+        compression_ratio_threshold=2.6,  # کرا بۆ 2.6 — دەقی زۆرتر دەپارێزێت
+        temperature=0.0,
+        vad_parameters=dict(
+            min_silence_duration_ms=200,  # کرا بۆ 200ms (پێشتر 250) — نێوانی کورتتر
+            threshold=0.35,               # VAD sensitivity بەرز — قسەی نەرمیش دەگرێت
+        ),
+        # ئاگادارکردنەوەی Whisper کە دیالۆگی ناوخۆیی، خەیاڵ، دەنگی باچکە هەمووی گرنگن
+        initial_prompt=(
+            "This is an anime episode dialogue. Include all speech: "
+            "narration, inner monologue, imagination sequences, "
+            "background characters, and whispered lines."
+        ),
     )
 
     segments, _ = model.transcribe(audio_path, **kwargs)
@@ -409,6 +441,7 @@ def transcribe_audio(audio_path: str) -> list:
         buf, t0, t1 = [], None, None
 
     for seg in segments:
+        # ── CRITICAL FIX: segment-level fallback when words absent ────
         if not seg.words:
             flush()
             seg_text = str(seg.text).strip()
@@ -427,11 +460,13 @@ def transcribe_audio(audio_path: str) -> list:
                 continue
             if t0 is None:
                 t0 = ws
+            # Silence gap → new cue
             if t1 is not None and (ws - t1) > 0.3:
                 flush()
                 t0 = ws
             buf.append(wt)
             t1 = we
+            # Max duration or sentence boundary
             if (we - t0 >= MAX_SUB_DURATION) or wt[-1] in ".!?؟":
                 flush()
 
@@ -477,6 +512,7 @@ def process_full_video(
     existing_raw: str = "",
 ) -> str:
 
+    # ── Resume point ──────────────────────────────────────────────
     last_sec = 0.0
     if existing_raw.strip():
         prev = parse_raw_text(existing_raw)
@@ -501,6 +537,7 @@ def process_full_video(
     with st.spinner("🧠 وەرگێڕان بۆ کوردی سۆرانی سینەمایی..."):
         all_chunks = build_chunks(cues, chunk_minutes)
 
+        # ── Smart Resume: skip done chunks, trim partial ───────────
         todo = []
         for ch in all_chunks:
             if not ch or ch[-1]["end"] <= last_sec:
@@ -514,25 +551,23 @@ def process_full_video(
             return existing_raw
 
         total = len(todo)
-        prog  = st.progress(0)
-        status_text = st.empty()  # ── پیشاندانی ڕێژەی سەدی ژمارەیی ──
+        prog  = st.progress(0, text="⏳ دەستپێکردن...")
         new_cues: list = []
 
         for i, ch in enumerate(todo):
-            # ── نوێکردنەوەی بەردەوامی لۆگی سەدی و کاتەکان ──
-            pct = int((i / total) * 100)
-            status_text.markdown(f"### ⏳ **٪{pct} ژێرنووس کراوە...**")
-
             translated = gemini_translate(
                 api_keys, ch, primary_model, thinking_budget
             )
             new_cues.extend(translated)
-            prog.progress((i + 1) / total)
+            pct = round((i + 1) / total * 100)
+            prog.progress(
+                (i + 1) / total,
+                text=f"🔄 {pct}% کراوە — پارچەی {i+1} لە {total}"
+            )
             if i < total - 1:
                 throttle_countdown()
 
-        # ── کاتێک بە تەواوی کۆتایی دێت ──
-        status_text.markdown("### 🏆 **٪١٠٠ ژێرنووس کراوە و تەواو بوو!**")
+        new_cues.sort(key=lambda x: x["start"])
         validated = validate_cues(new_cues)
 
     lines = [
@@ -552,6 +587,20 @@ def hex_to_ass(h: str) -> str:
     h = h.lstrip("#").upper().ljust(6, "0")
     return f"&H00{h[4:6]}{h[2:4]}{h[0:2]}&"
 
+def get_video_resolution(video_path: str) -> tuple:
+    """Returns (width, height) of video, defaults to (1280,720) on failure."""
+    try:
+        r = subprocess.run(
+            ["ffprobe", "-v", "error", "-select_streams", "v:0",
+             "-show_entries", "stream=width,height",
+             "-of", "csv=p=0", video_path],
+            capture_output=True, text=True, check=True,
+        )
+        w, h = r.stdout.strip().split(",")
+        return int(w), int(h)
+    except Exception:
+        return 1280, 720
+
 def build_ass_file(
     cues: list,
     font_size: int,
@@ -559,15 +608,17 @@ def build_ass_file(
     wm_color: str,
     wm_font_size: int,
     wm_align: int,
+    video_path: str = "",
 ) -> str:
     fn  = find_kurdish_font()
     wma = hex_to_ass(wm_color)
+    vw, vh = get_video_resolution(video_path) if video_path else (1280, 720)
 
     header = [
         "[Script Info]",
         "ScriptType: v4.00+",
-        "PlayResX: 1280",
-        "PlayResY: 720",
+        f"PlayResX: {vw}",
+        f"PlayResY: {vh}",
         "ScaledBorderAndShadow: yes",
         "",
         "[V4+ Styles]",
@@ -578,8 +629,8 @@ def build_ass_file(
         "-1,0,0,0,100,100,0,0,1,1.5,0,2,30,30,20,1",
         f"Style: CornerStyle,{fn},30,&H00E0E0E0,&H000000FF,&H00000000,&H00000000,"
         "0,0,0,0,100,100,0,0,1,1.5,0,9,20,20,20,1",
-        f"Style: WatermarkStyle,{fn},{wm_font_size},{wma},&H000000FF,&H00000000,&H00000000,"
-        "0,0,0,0,100,100,0,0,1,1.5,0,7,15,20,20,1",
+        f"Style: WatermarkStyle,Arial,{wm_font_size},{wma},&H000000FF,&H00000000,&H00000000,"
+        "1,0,0,0,100,100,0,0,1,1.5,0,7,15,20,20,1",
         "",
         "[Events]",
         "Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text",
@@ -592,7 +643,12 @@ def build_ass_file(
         )
 
     for c in cues:
-        txt   = clean_punctuation(c.get("text", ""))
+        raw_text = c.get("text", "")
+        # ── CRITICAL: هەرگیز تاگی ASS دەستکاری مەکە ({\ دەتەوێت بمێنێتەوە) ──
+        if "{\\" in raw_text:
+            txt = raw_text          # intro / credits — تەواو بهێڵەوە
+        else:
+            txt = clean_punctuation(raw_text)   # دیالۆگی ئاسایی
         a_tag = c.get("alignment_tag", "{\\an2}")
         style = c.get("style", "Default")
         events.append(f"Dialogue: 0,{c['start']},{c['end']},{style},,0,0,0,,{a_tag}{txt}")
@@ -633,15 +689,18 @@ def auto_dl(data: bytes, name: str, mime: str):
 # ═══════════════════════════════════════════════════════════════════
 def main():
 
+    # ── _cleanup_sub_session lives here → zero NameError risk ─────
     def _cleanup_sub_session():
         for k in ["sub_raw", "sub_input_path", "sub_temp_dir"]:
             st.session_state.pop(k, None)
         st.rerun()
+    # ─────────────────────────────────────────────────────────────
 
     st.set_page_config(page_title="🎬 Sorani Subtitle Studio", layout="wide")
     inject_background()
     st.title("🎬 Kurdish Sorani Cinematic Subtitle Generator")
 
+    # ── Session state init ────────────────────────────────────────
     for k in ["sub_raw", "sub_input_path", "sub_temp_dir"]:
         st.session_state.setdefault(k, None)
 
@@ -662,7 +721,7 @@ def main():
         primary_model = st.selectbox("🤖 مۆدێلی AI", MODEL_LIST)
 
         thinking_label  = st.selectbox("🧠 جۆری بیرکردنەوە", list(THINKING_MAP.keys()))
-        thinking_budget = THINKING_MAP[thinking_label]   
+        thinking_budget = THINKING_MAP[thinking_label]   # "minimal" / "medium" / "high"
 
         st.markdown("---")
         chunk_minutes = st.slider("⏱️ قەبارەی پارچەکان (خولەک)", 3, 15, 5)
@@ -813,7 +872,7 @@ def main():
                 intro.append({
                     "start": float_to_ass(t), "end": float_to_ass(end),
                     "alignment_tag": "{\\an2}",
-                    "text": f"{{\\c{hex_to_ass('#00FF00')}}}وەرگێڕان\\N{translator_name}",
+                    "text": f"وەرگێڕان\\N{translator_name}",
                 })
                 t = end
 
@@ -822,7 +881,7 @@ def main():
                 intro.append({
                     "start": float_to_ass(t), "end": float_to_ass(end),
                     "alignment_tag": "{\\an2}",
-                    "text": f"{{\\c{hex_to_ass('#00FFFF')}}}تەکنیک\\N{tech_name}",
+                    "text": f"تەکنیک\\N{tech_name}",
                 })
                 t = end
 
@@ -835,7 +894,7 @@ def main():
                     c.setdefault("alignment_tag", "{\\an2}")
 
             full_cues = intro + cues
-            ass_txt   = build_ass_file(full_cues, font_size, wm_text, wm_color, wm_font_size, wm_align)
+            ass_txt   = build_ass_file(full_cues, font_size, wm_text, wm_color, wm_font_size, wm_align, video_path=in_p)
             srt_txt   = build_srt_file(cues)
 
             with open(ass_p, "w", encoding="utf-8") as f: f.write(ass_txt)
