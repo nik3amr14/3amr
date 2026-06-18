@@ -8,7 +8,6 @@ Features:
   • Chunk-size slider (3-15 min)
   • Whisper word-level + segment-level fallback (no silent skips)
   • Smart Resume (continue from last translated second)
-  • VAD toggle  ➜  Yellow 🎵 song lyrics in ASS/SRT
   • Strict punctuation stripping
   • Auto-generates .streamlit/config.toml (700 MB upload limit)
   • _cleanup_sub_session defined inside main() → no NameError
@@ -44,10 +43,6 @@ KU_FONT_NAME = "Bahij Janna"
 
 MAX_SUB_DURATION = 4.0
 THROTTLE_SECONDS = 50
-
-# ASS colour tags  (BGR order inside &HAABBGGRR&)
-ASS_YELLOW = "{\\c&H0000FFFF&}"   # yellow  (R=FF G=FF B=00)
-ASS_WHITE  = "{\\c&H00FFFFFF&}"   # white   (reset)
 
 MODEL_LIST = [
     "gemini-3.5-flash",
@@ -187,12 +182,6 @@ def shift_transcript(raw: str, delay: float) -> str:
             lines.append(line)
     return "\n".join(lines)
 
-def _is_song(text: str) -> bool:
-    return text.startswith("🎵")
-
-def _strip_song(text: str) -> str:
-    return text[1:].strip() if _is_song(text) else text
-
 # ═══════════════════════════════════════════════════════════════════
 #  GEMINI  JSON PARSER
 # ═══════════════════════════════════════════════════════════════════
@@ -242,14 +231,7 @@ def gemini_translate(
     chunk: list,
     primary_model: str,
     thinking_budget: int,
-    mixed_mode: bool,
 ) -> list:
-
-    song_rule = (
-        "\n٨. ئەگەر دیتت کە دێڕێک گۆرانییە یان لیریکە، دەبێت 🎵 لە سەرەتای دەقەکەدا بنووسیت. "
-        'نموونە: "🎵 دڵم لەتوودا کوتا"\n'
-        if mixed_mode else ""
-    )
 
     system = f"""تۆ باشترین و بێهاوتاترین وەرگێڕی سینەمایی و ئەدەبی کوردستانیت. زمانت کوردی سۆرانی پووری ئاڵا و سەرووی ئاستی ئامۆژگاریە. ئەرکەکەت دانانی ژێرنووسی سینەماییانەی زۆر شاز، پاراو، و ناوازەیە بۆ هەموو جۆرە ناوەڕۆکی ڤیدیۆیەک — فیلم، زنجیرە، ئەنیمە، داکیومێنتری، یا هەر شتێکی تر.
 
@@ -295,9 +277,7 @@ def gemini_translate(
 
 ⑦ بزرتەری خاڵبەندی
    • هیچ نیشانەی خاڵبەندییەک مەبەکاربهێنە: ؟ . : ! ـ ؛ " ' ? , ; - _
-   • هیچ ئیموجییەک مەبەکاربهێنە مەگەر 🎵 بۆ گۆرانی.
-
-{song_rule}
+   • هیچ ئیموجییەک مەبەکاربهێنە.
 
 ⑧ نموونەی وەرگێڕانی باش
    EN: "Are you out of your mind?!"
@@ -421,19 +401,18 @@ def extract_audio(video_path: str, audio_path: str):
         capture_output=True, check=True,
     )
 
-def transcribe_audio(audio_path: str, use_vad: bool = True) -> list:
+def transcribe_audio(audio_path: str) -> list:
     model  = load_whisper()
     kwargs = dict(
         beam_size=5,
         word_timestamps=True,
-        vad_filter=use_vad,
+        vad_filter=True,
         condition_on_previous_text=True,   # better context between segments
         no_speech_threshold=0.4,           # catch more quiet speech
         compression_ratio_threshold=2.4,
         temperature=0.0,                   # deterministic = more consistent
+        vad_parameters=dict(min_silence_duration_ms=250),
     )
-    if use_vad:
-        kwargs["vad_parameters"] = dict(min_silence_duration_ms=250)
 
     segments, _ = model.transcribe(audio_path, **kwargs)
 
@@ -514,7 +493,6 @@ def process_full_video(
     primary_model: str,
     thinking_budget: int,
     chunk_minutes: float,
-    mixed_mode: bool,
     existing_raw: str = "",
 ) -> str:
 
@@ -531,7 +509,7 @@ def process_full_video(
         extract_audio(video_path, audio_path)
 
     with st.spinner("📝 نووسینەوە (Whisper)..."):
-        cues = transcribe_audio(audio_path, use_vad=not mixed_mode)
+        cues = transcribe_audio(audio_path)
         try:
             os.remove(audio_path)
         except Exception:
@@ -562,7 +540,7 @@ def process_full_video(
 
         for i, ch in enumerate(todo):
             translated = gemini_translate(
-                api_keys, ch, primary_model, thinking_budget, mixed_mode
+                api_keys, ch, primary_model, thinking_budget
             )
             new_cues.extend(translated)
             prog.progress((i + 1) / total)
@@ -629,13 +607,10 @@ def build_ass_file(
         )
 
     for c in cues:
-        raw   = c.get("text", "")
-        song  = _is_song(raw)
-        txt   = clean_punctuation(_strip_song(raw))
+        txt   = clean_punctuation(c.get("text", ""))
         a_tag = c.get("alignment_tag", "{\\an2}")
         style = c.get("style", "Default")
-        ctag  = ASS_YELLOW if song else ""
-        events.append(f"Dialogue: 0,{c['start']},{c['end']},{style},,0,0,0,,{a_tag}{ctag}{txt}")
+        events.append(f"Dialogue: 0,{c['start']},{c['end']},{style},,0,0,0,,{a_tag}{txt}")
 
     return "\n".join(header + events)
 
@@ -644,11 +619,7 @@ def build_srt_file(cues: list) -> str:
     for i, c in enumerate(cues, 1):
         s   = sec_to_srt(secs(c["start"]))
         e   = sec_to_srt(secs(c["end"]))
-        raw = c.get("text", "")
-        song = _is_song(raw)
-        txt  = clean_punctuation(re.sub(r'\{\\[^}]*\}', '', _strip_song(raw)))
-        if song:
-            txt = f'<font color="#FFFF00">{txt}</font>'
+        txt = clean_punctuation(re.sub(r'\{\\[^}]*\}', '', c.get("text", "")))
         out.append(f"{i}\n{s} --> {e}\n{txt}\n")
     return "\n".join(out)
 
@@ -713,16 +684,6 @@ def main():
 
         st.markdown("---")
         chunk_minutes = st.slider("⏱️ قەبارەی پارچەکان (خولەک)", 3, 15, 5)
-
-        st.markdown("---")
-        vad_mode   = st.radio(
-            "🎧 جۆری دەنگ",
-            ["تەنها قسەکردن", "قسەکردن و گۆرانی"],
-            horizontal=False,
-        )
-        mixed_mode = (vad_mode == "قسەکردن و گۆرانی")
-        if mixed_mode:
-            st.info("🎵 گۆرانییەکان بە ڕەنگی زەرد دەردەکەون")
 
         st.markdown("---")
         font_size = st.slider("📐 قەبارەی فۆنت", 20, 80, 52)
@@ -807,7 +768,7 @@ def main():
 
         result = process_full_video(
             valid_keys, in_p, primary_model, thinking_budget,
-            chunk_minutes, mixed_mode,
+            chunk_minutes,
         )
         if result:
             st.session_state.sub_raw = result
@@ -822,7 +783,6 @@ def main():
             primary_model,
             thinking_budget,
             chunk_minutes,
-            mixed_mode,
             existing_raw=st.session_state.sub_raw,
         )
         if result:
