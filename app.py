@@ -40,10 +40,12 @@ GEMINI_MODELS = [
     "gemini-3-flash-preview"
 ]
 
+# مۆدێلی دیپ‌سیک بۆ گرۆق زیاد کرا
 GROQ_MODELS = [
-    "llama-3.3-70b-specdec",
-    "llama-4-scout",
-    "qwen-3.6-27b"
+    "deepseek-r1-distill-llama-70b",
+    "llama-3.3-70b-versatile",
+    "gemma2-9b-it",
+    "llama-3.1-8b-instant"
 ]
 
 LANG_MAP = {
@@ -61,12 +63,6 @@ LANG_MAP = {
     "Chinese (چینی)": "zh",
     "German (ئەڵمانی)": "de",
     "Italian (ئیتاڵی)": "it"
-}
-
-THINKING_MAP = {
-    "⚡ Ultra Fast  (بێ بیرکردنەوە)": "minimal",
-    "⚖️ Standard / Balanced": "medium",
-    "🧠 Deep / Precise  (بیرکردنەوەی بەرز)": "high",
 }
 
 def inject_background():
@@ -219,7 +215,7 @@ def build_chunks(cues: list, minutes: float) -> list:
 # ═══════════════════════════════════════════════════════════════════
 #  ORCHESTRATOR 
 # ═══════════════════════════════════════════════════════════════════
-def process_full_video(provider, gemini_keys, groq_keys, video_path, primary_model, thinking_budget, chunk_minutes, selected_lang=None, existing_raw=""):
+def process_full_video(provider, gemini_keys, groq_keys, video_path, gemini_model, groq_model, thinking_budget, chunk_minutes, selected_lang=None, existing_raw=""):
     last_sec = 0.0
     if existing_raw.strip():
         prev = parse_raw_text(existing_raw)
@@ -257,6 +253,7 @@ def process_full_video(provider, gemini_keys, groq_keys, video_path, primary_mod
             pct = int((i / total) * 100)
             prog.progress(i / total, text=f"🔄 لە ٪{pct} ی ڤیدیۆکە تەواو بووە... ({chunk_label})")
 
+            # ناردنی هەردوو مۆدێلەکە بۆ مێشکەکە
             translated, cur_gem_idx, cur_groq_idx = ai_translate(
                 provider=provider,
                 gemini_keys=gemini_keys,
@@ -265,7 +262,8 @@ def process_full_video(provider, gemini_keys, groq_keys, video_path, primary_mod
                 cur_groq_idx=cur_groq_idx,
                 transcript_chunk=ch, 
                 thinking_budget=thinking_budget, 
-                selected_model=primary_model,
+                gemini_model=gemini_model,
+                groq_model=groq_model,
                 status_msg=status_msg
             )
             
@@ -354,28 +352,34 @@ def main():
     with st.sidebar:
         st.header("⚙️ ڕێکخستنەکان")
         
-        # ── هەڵبژاردنی فەرماندەی سەرەکی ──
-        provider = st.radio("کام سێرڤەر یەکەم جار وەرگێڕانەکە بکات؟", ["Google Gemini", "Groq"])
+        provider = st.radio("کام سێرڤەر یەکەم جار وەرگێڕانەکە بکات؟", ["Google Gemini", "Groq"], horizontal=True)
 
         st.markdown("---")
-        st.subheader("🔑 کلیلەکانی سێرڤەرەکان (٦ کلیل)")
-        st.markdown("**Google Gemini (٣ کلیل)**")
+        st.subheader("🔑 کلیلەکانی API")
+        
+        st.markdown("**مۆدێلەکانی گووگڵ**")
         gemini_keys_input = [st.text_input(f"کلیلی جێمینای {i+1}", type="password", key=f"gemini_{i}") for i in range(3)]
         gemini_keys = [k.strip() for k in gemini_keys_input if k.strip()]
-        
-        st.markdown("**Groq (٣ کلیل)**")
+        gemini_model = st.selectbox("🤖 مۆدێلی Gemini", GEMINI_MODELS, index=0)
+
+        st.markdown("**مۆدێلەکانی گرۆق**")
         groq_keys_input = [st.text_input(f"کلیلی گرۆق {i+1}", type="password", key=f"groq_{i}") for i in range(3)]
         groq_keys = [k.strip() for k in groq_keys_input if k.strip()]
+        groq_model = st.selectbox("🤖 مۆدێلی Groq", GROQ_MODELS, index=0)
 
         st.markdown("---")
-        # ── لیستی مۆدێلەکان بەپێی سێرڤەرەکە دەگۆڕێت ──
-        if provider == "Google Gemini":
-            primary_model = st.selectbox("🤖 مۆدێلی سەرەکی هەڵبژێرە", GEMINI_MODELS, index=0)
-        else:
-            primary_model = st.selectbox("🤖 مۆدێلی سەرەکی هەڵبژێرە", GROQ_MODELS, index=0)
-
-        thinking_label = st.selectbox("🧠 جۆری بیرکردنەوە", list(THINKING_MAP.keys()), index=1)
-        thinking_budget = THINKING_MAP[thinking_label]
+        thinking_label = st.selectbox(
+            "🧠 Thinking Mode",
+            ["Ultra Fast (minimal)", "Balanced (medium)", "Deep (high)", "Dynamic (بێ لیمیت)"],
+            index=3
+        )
+        thinking_map = {
+            "Ultra Fast (minimal)": 0,
+            "Balanced (medium)": 8192,
+            "Deep (high)": 24576,
+            "Dynamic (بێ لیمیت)": -1
+        }
+        thinking_budget = thinking_map[thinking_label]
 
         st.markdown("---")
         st.subheader("🌐 زمانی ڤیدیۆکە (سێرچ بکە)")
@@ -440,14 +444,14 @@ def main():
         st.session_state.sub_input_path = in_p
         st.session_state.sub_raw = None
 
-        result = process_full_video(provider, gemini_keys, groq_keys, in_p, primary_model, thinking_budget, chunk_minutes, selected_lang=selected_lang)
+        result = process_full_video(provider, gemini_keys, groq_keys, in_p, gemini_model, groq_model, thinking_budget, chunk_minutes, selected_lang=selected_lang)
         if result:
             st.session_state.sub_raw = result
             st.rerun()
 
     if resume_btn:
         if not gemini_keys and not groq_keys: st.error("❌ تکایە لایەنی کەم یەک کلیل بنووسە."); st.stop()
-        result = process_full_video(provider, gemini_keys, groq_keys, st.session_state.sub_input_path, primary_model, thinking_budget, chunk_minutes, selected_lang=selected_lang, existing_raw=st.session_state.sub_raw)
+        result = process_full_video(provider, gemini_keys, groq_keys, st.session_state.sub_input_path, gemini_model, groq_model, thinking_budget, chunk_minutes, selected_lang=selected_lang, existing_raw=st.session_state.sub_raw)
         if result:
             st.session_state.sub_raw = result
             st.rerun()
