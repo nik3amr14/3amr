@@ -14,7 +14,7 @@ from faster_whisper import WhisperModel
 from ai_translator import gemini_translate
 
 # ═══════════════════════════════════════════════════════════════════
-#  AUTO-GENERATE STREAMLIT CONFIG  (700 MB upload)
+#  AUTO-GENERATE STREAMLIT CONFIG
 # ═══════════════════════════════════════════════════════════════════
 APP_DIR  = os.path.dirname(os.path.abspath(__file__))
 ROOT_DIR = os.path.dirname(APP_DIR)
@@ -41,9 +41,9 @@ MODEL_LIST = [
     "gemini-3.1-flash-lite",
 ]
 
-# لیستی زمانەکان بۆ چارەسەری کێشەی مۆسیقای باکگراوند [25]
+# مۆدی زمانە فەرمییەکان بۆ لۆجیکی قوفڵکردن [25]
 LANG_MAP = {
-    "Auto-Detect (خۆکار)": None,
+    "Auto-Detect (خۆکارانە بدۆزەرەوە)": None,
     "Japanese (ژاپۆنی)": "ja",
     "English (ئینگلیزی)": "en",
     "Persian (فارسی)": "fa",
@@ -149,7 +149,7 @@ def extract_audio(video_path: str, audio_path: str):
 def transcribe_audio(audio_path: str, selected_lang: str = None) -> list:
     model = load_whisper()
     
-    # قفڵکردنی زمان ئەگەر بە دەستی دیاری کرابێت، ئەگەرنا بە ئۆتۆماتیکی دەیدۆزێتەوە [25]
+    # ناسینەوە و قفڵکردنی خۆکارانەی زمانی ڤیدیۆ پێش دەستپێکردنی وەرگێڕان [25]
     if not selected_lang:
         _, info = model.transcribe(audio_path, beam_size=1)
         detected_lang = info.language
@@ -164,7 +164,7 @@ def transcribe_audio(audio_path: str, selected_lang: str = None) -> list:
         beam_size=5, word_timestamps=True, vad_filter=True, condition_on_previous_text=False,
         no_speech_threshold=0.25, compression_ratio_threshold=2.4, temperature=0.0,
         vad_parameters=dict(min_silence_duration_ms=300),
-        language=final_lang # قفڵکردنی زمان بۆ ئەوەی لێی تێکنەچێت [25]
+        language=final_lang
     )
     segments, _ = model.transcribe(audio_path, **kwargs)
     cues, buf, t0, t1 = [], [], None, None
@@ -208,17 +208,13 @@ def build_chunks(cues: list, minutes: float) -> list:
 #  ORCHESTRATOR 
 # ═══════════════════════════════════════════════════════════════════
 def process_full_video(api_keys, video_path, primary_model, thinking_budget, chunk_minutes, selected_lang=None, existing_raw=""):
-    last_sec = 0.0
-    if existing_raw.strip():
-        prev = parse_raw_text(existing_raw)
-        if prev: last_sec = secs(prev[-1]["end"])
-
-    audio_path = os.path.splitext(video_path)[0] + ".wav"
-
-    with st.spinner("🎵 دەرهێنانی دەنگ و سافکردنیەتی (Audio Normalization)..."):
+    audio_path = video_path.replace(".mp4", ".wav")
+    last_translated_sec = parse_existing_raw_to_last_time(existing_raw)
+    
+    with st.spinner("🎵 خەریکی دەرهێنانی دەنگ و سافکردنیەتی (Audio Normalization)..."):
         extract_audio(video_path, audio_path)
 
-    with st.spinner("📝 نووسینەوە (Whisper)..."):
+    with st.spinner("📝 خەریکی نووسینەوەی دەنگەکەیە بە وردی (Faster-Whisper)..."):
         cues = transcribe_audio(audio_path, selected_lang=selected_lang)
         try: os.remove(audio_path)
         except: pass
@@ -331,7 +327,7 @@ def main():
         for k in ["sub_raw", "sub_input_path", "sub_temp_dir"]: st.session_state.pop(k, None)
         st.rerun()
 
-    st.set_page_config(page_title="🎬 Sorani Subtitle Studio", layout="wide")
+    st.set_page_config(page_title="Sorani Subtitle Studio", layout="wide")
     inject_background()
     st.title("🎬 Kurdish Sorani Subtitle Generator")
 
@@ -348,14 +344,14 @@ def main():
         thinking_label = st.selectbox("🧠 جۆری بیرکردنەوە", list(THINKING_MAP.keys()), index=1)
         thinking_budget = THINKING_MAP[thinking_label]
 
-        # 🌐 زیادکردنی بەشی هەڵبژاردنی زمان لە سایدباردا [25]
+        # 🌐 سایدباری هەڵبژاردنی زمان بە ڕیزبەندی ئەلفابێتی زۆر خاوێن
         st.markdown("---")
         st.subheader("🌐 زمانی ڤیدیۆکە")
         lang_choice = st.selectbox(
-            "زمانەکە بە دەستی دیاری بکە (بۆ ڕێگری لە لۆدی مۆسیقای تیکتۆک):",
+            "زمانەکە بە دەستی دیاری بکە:",
             list(LANG_MAP.keys()),
             index=0,
-            help="ئەگەر ڤیدیۆکەت مۆسیقای یەکجار بەرزی لەسەرە، لێرەوە زمانەکەی بە دەستی قوفڵ بکە تا تووشی هیچ هەڵەیەک نەبیت."
+            help="دەتوانیت پیت بنووسیت بۆ گەڕانی خێرا بەدوای زمانەکەدا."
         )
         selected_lang = LANG_MAP[lang_choice]
 
@@ -380,11 +376,11 @@ def main():
     with st.expander("🎨 واتەرمارک", expanded=False):
         w1, w2, w3, w4 = st.columns(4)
         with w1: wm_text = st.text_input("📝 نووسینی واتەرمارک")
-        with w2: wm_color = st.color_picker("🎨 ڕەنگ", "#FFFFFF")
+        with w2: wm_color = st.color_picker("🎨 ڕەنگی لۆگۆ", "#FFFFFF")
         with w3: wm_font_size = st.slider("📏 قەبارە", 10, 150, 30)
         with w4:
             wm_pos = st.selectbox("📍 شوێن", ["چەپ", "ڕاست"])
-            wm_align = 7 if wm_pos == "چەپ" else 9
+            wm_alignment = 7 if wm_pos == "چەپ" else 9
 
     st.markdown("---")
     delay_seconds = st.slider("⏱️ شوێنکردنەوەی کاتی ژێرنووس (چرکە)", -15.0, 15.0, 0.0, 0.05)
