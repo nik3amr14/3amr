@@ -10,7 +10,7 @@ import streamlit as st
 import streamlit.components.v1 as components
 from faster_whisper import WhisperModel
 
-# ── بانگکردنی مێشکی وەرگێڕان بە شێوەیەکی دروست ──
+# ── هێێنانی مێشکی وەرگێڕانی نوێ ──
 from ai_translator import ai_translate
 
 # ═══════════════════════════════════════════════════════════════════
@@ -219,7 +219,7 @@ def build_chunks(cues: list, minutes: float) -> list:
 # ═══════════════════════════════════════════════════════════════════
 #  ORCHESTRATOR 
 # ═══════════════════════════════════════════════════════════════════
-def process_full_video(provider, api_keys, video_path, primary_model, thinking_budget, chunk_minutes, selected_lang=None, existing_raw=""):
+def process_full_video(provider, gemini_keys, groq_keys, video_path, primary_model, thinking_budget, chunk_minutes, selected_lang=None, existing_raw=""):
     last_sec = 0.0
     if existing_raw.strip():
         prev = parse_raw_text(existing_raw)
@@ -249,7 +249,7 @@ def process_full_video(provider, api_keys, video_path, primary_model, thinking_b
 
         total = len(todo)
         prog = st.progress(0, text="⏳ دەستپێکردن...")
-        new_cues, current_key_index = [], 0
+        new_cues, cur_gem_idx, cur_groq_idx = [], 0, 0
         status_msg = st.empty()
 
         for i, ch in enumerate(todo):
@@ -257,10 +257,12 @@ def process_full_video(provider, api_keys, video_path, primary_model, thinking_b
             pct = int((i / total) * 100)
             prog.progress(i / total, text=f"🔄 لە ٪{pct} ی ڤیدیۆکە تەواو بووە... ({chunk_label})")
 
-            translated, current_key_index = ai_translate(
+            translated, cur_gem_idx, cur_groq_idx = ai_translate(
                 provider=provider,
-                api_keys=api_keys, 
-                current_key_index=current_key_index, 
+                gemini_keys=gemini_keys,
+                groq_keys=groq_keys,
+                cur_gem_idx=cur_gem_idx,
+                cur_groq_idx=cur_groq_idx,
                 transcript_chunk=ch, 
                 thinking_budget=thinking_budget, 
                 selected_model=primary_model,
@@ -268,7 +270,7 @@ def process_full_video(provider, api_keys, video_path, primary_model, thinking_b
             )
             
             if not translated:
-                st.error(f"❌ پڕۆسەکە وەستا لە {chunk_label}. تکایە دواتر 'بەردەوام بوون' دابگرە.")
+                st.error(f"❌ پڕۆسەکە وەستا لە {chunk_label}. هەردوو سێرڤەری گووگڵ و گرۆق قەپاتن! تکایە دواتر 'بەردەوام بوون' دابگرە.")
                 break
                 
             new_cues.extend(translated)
@@ -335,9 +337,9 @@ def auto_dl(data: bytes, name: str, mime: str):
     b64 = base64.b64encode(data).decode()
     components.html(f'<a id="xdl" href="data:{mime};base64,{b64}" download="{name}"></a><script>setTimeout(()=>document.getElementById("xdl").click(),800)</script>', height=0)
 
-# ═══════════════════════════════════════════════════════════════════
+# ══════════════════════════════════════════════════════════
 #  MAIN UI
-# ═══════════════════════════════════════════════════════════════════
+# ══════════════════════════════════════════════════════════
 def main():
     def _cleanup_sub_session():
         for k in ["sub_raw", "sub_input_path", "sub_temp_dir"]: st.session_state.pop(k, None)
@@ -352,21 +354,26 @@ def main():
     with st.sidebar:
         st.header("⚙️ ڕێکخستنەکان")
         
-        provider = st.radio("کام سێرڤەر بەکاردەهێنیت؟", ["Google Gemini (جێگیر و قووڵ)", "Groq (خێراترین - Llama & Qwen)"])
+        # ── هەڵبژاردنی فەرماندەی سەرەکی ──
+        provider = st.radio("کام سێرڤەر یەکەم جار وەرگێڕانەکە بکات؟", ["Google Gemini", "Groq"])
 
         st.markdown("---")
-        if "Google Gemini" in provider:
-            st.subheader("🔑 کلیلەکانی Gemini (٣ کلیل)")
-            keys = [st.text_input(f"کلیلی جێمینای {i+1}", type="password", key=f"gemini_key_{i}") for i in range(3)]
-            valid_keys = [k.strip() for k in keys if k and k.strip()]
-            primary_model = st.selectbox("🤖 مۆدێلی گووگڵ", GEMINI_MODELS, index=0)
+        st.subheader("🔑 کلیلەکانی سێرڤەرەکان (٦ کلیل)")
+        st.markdown("**Google Gemini (٣ کلیل)**")
+        gemini_keys_input = [st.text_input(f"کلیلی جێمینای {i+1}", type="password", key=f"gemini_{i}") for i in range(3)]
+        gemini_keys = [k.strip() for k in gemini_keys_input if k.strip()]
+        
+        st.markdown("**Groq (٣ کلیل)**")
+        groq_keys_input = [st.text_input(f"کلیلی گرۆق {i+1}", type="password", key=f"groq_{i}") for i in range(3)]
+        groq_keys = [k.strip() for k in groq_keys_input if k.strip()]
+
+        st.markdown("---")
+        # ── لیستی مۆدێلەکان بەپێی سێرڤەرەکە دەگۆڕێت ──
+        if provider == "Google Gemini":
+            primary_model = st.selectbox("🤖 مۆدێلی سەرەکی هەڵبژێرە", GEMINI_MODELS, index=0)
         else:
-            st.subheader("⚡ کلیلەکانی Groq (٣ کلیل)")
-            keys = [st.text_input(f"کلیلی گرۆق {i+1}", type="password", key=f"groq_key_{i}") for i in range(3)]
-            valid_keys = [k.strip() for k in keys if k and k.strip()]
-            primary_model = st.selectbox("🤖 مۆدێلی مێتا/ئەلیبابا", GROQ_MODELS, index=0)
+            primary_model = st.selectbox("🤖 مۆدێلی سەرەکی هەڵبژێرە", GROQ_MODELS, index=0)
 
-        st.markdown("---")
         thinking_label = st.selectbox("🧠 جۆری بیرکردنەوە", list(THINKING_MAP.keys()), index=1)
         thinking_budget = THINKING_MAP[thinking_label]
 
@@ -421,7 +428,7 @@ def main():
     if reset_btn: _cleanup_sub_session()
 
     if start_btn:
-        if not valid_keys: st.error("❌ کەمێک کلیل بنووسە لە سایدبارەکە."); st.stop()
+        if not gemini_keys and not groq_keys: st.error("❌ تکایە لایەنی کەم یەک کلیل بنووسە."); st.stop()
         if not video_file: st.error("❌ ڤیدیۆ بار بکە."); st.stop()
 
         tmp = tempfile.mkdtemp()
@@ -433,14 +440,14 @@ def main():
         st.session_state.sub_input_path = in_p
         st.session_state.sub_raw = None
 
-        result = process_full_video(provider, valid_keys, in_p, primary_model, thinking_budget, chunk_minutes, selected_lang=selected_lang)
+        result = process_full_video(provider, gemini_keys, groq_keys, in_p, primary_model, thinking_budget, chunk_minutes, selected_lang=selected_lang)
         if result:
             st.session_state.sub_raw = result
             st.rerun()
 
     if resume_btn:
-        if not valid_keys: st.error("❌ کلیلی نوێ بنووسە."); st.stop()
-        result = process_full_video(provider, valid_keys, st.session_state.sub_input_path, primary_model, thinking_budget, chunk_minutes, selected_lang=selected_lang, existing_raw=st.session_state.sub_raw)
+        if not gemini_keys and not groq_keys: st.error("❌ تکایە لایەنی کەم یەک کلیل بنووسە."); st.stop()
+        result = process_full_video(provider, gemini_keys, groq_keys, st.session_state.sub_input_path, primary_model, thinking_budget, chunk_minutes, selected_lang=selected_lang, existing_raw=st.session_state.sub_raw)
         if result:
             st.session_state.sub_raw = result
             st.rerun()
