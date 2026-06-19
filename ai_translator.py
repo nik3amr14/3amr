@@ -107,7 +107,7 @@ def translate_with_gemini(api_keys, current_key_index, transcript_chunk, thinkin
             attempt += 1
             try:
                 client = genai.Client(api_key=api_key)
-                _log(status_msg, f"🧠 [{model_name}] - وەرگێڕان بە کلیل {current_key_index + 1}... (هەوڵی {attempt}/{MAX_ATTEMPTS_PER_MODEL})")
+                _log(status_msg, f"🧠 [Google: {model_name}] - وەرگێڕان بە کلیل {current_key_index + 1}... (هەوڵی {attempt}/{MAX_ATTEMPTS_PER_MODEL})")
                 
                 resp = client.models.generate_content(
                     model=model_name, contents=[user_prompt], config=generation_config
@@ -152,7 +152,7 @@ def translate_with_groq(groq_keys, current_key_index, transcript_chunk, selected
             attempt += 1
             try:
                 client = Groq(api_key=cur_key)
-                _log(status_msg, f"⚡ [{model_name}] - وەرگێڕانی خێرا بە گرۆق... (هەوڵی {attempt})")
+                _log(status_msg, f"⚡ [Groq: {model_name}] - وەرگێڕانی خێرا بە گرۆق... (هەوڵی {attempt})")
                 
                 resp = client.chat.completions.create(
                     messages=[
@@ -161,7 +161,7 @@ def translate_with_groq(groq_keys, current_key_index, transcript_chunk, selected
                     ],
                     model=model_name,
                     temperature=0.75,
-                    response_format={"type": "json_object"}
+                    response_format={"type": "json_object"} 
                 )
                 raw_data = json.loads(resp.choices[0].message.content)
                 translated = raw_data.get("translations", [])
@@ -185,8 +185,35 @@ def translate_with_groq(groq_keys, current_key_index, transcript_chunk, selected
                     time.sleep(2)
     return [], current_key_index
 
-def ai_translate(provider: str, api_keys: list, current_key_index: int, transcript_chunk: list, thinking_budget, selected_model: str, status_msg) -> tuple[list, int]:
+# ═══════════════════════════════════════════════════════════════════
+#  دەروازەی سەرەکی وەرگێڕان (Orchestrator Gateway)
+# ═══════════════════════════════════════════════════════════════════
+def ai_translate(provider: str, gemini_keys: list, groq_keys: list, cur_gem_idx: int, cur_groq_idx: int, transcript_chunk: list, thinking_budget, selected_model: str, status_msg):
+    
     if "Groq" in provider:
-        return translate_with_groq(api_keys, current_key_index, transcript_chunk, selected_model, status_msg)
+        # سەرەتا هەوڵدان بە گرۆق
+        if groq_keys:
+            translated, cur_groq_idx = translate_with_groq(groq_keys, cur_groq_idx, transcript_chunk, selected_model, status_msg)
+            if translated: return translated, cur_gem_idx, cur_groq_idx
+            
+        # ئەگەر گرۆق بە تەواوی وەستا، باز دەداتە سەر گووگڵ (Cross-Provider Fallback)
+        if gemini_keys:
+            _log(status_msg, "🚨 سێرڤەری Groq بە تەواوی وەستا! گواستنەوەی خێرا بۆ سێرڤەری یەدەگی Google Gemini...")
+            time.sleep(2)
+            translated, cur_gem_idx = translate_with_gemini(gemini_keys, cur_gem_idx, transcript_chunk, thinking_budget, GEMINI_FALLBACKS[0], status_msg)
+            if translated: return translated, cur_gem_idx, cur_groq_idx
+            
     else:
-        return translate_with_gemini(api_keys, current_key_index, transcript_chunk, thinking_budget, selected_model, status_msg)
+        # سەرەتا هەوڵدان بە گووگڵ
+        if gemini_keys:
+            translated, cur_gem_idx = translate_with_gemini(gemini_keys, cur_gem_idx, transcript_chunk, thinking_budget, selected_model, status_msg)
+            if translated: return translated, cur_gem_idx, cur_groq_idx
+            
+        # ئەگەر گووگڵ بە تەواوی وەستا، باز دەداتە سەر گرۆق (Cross-Provider Fallback)
+        if groq_keys:
+            _log(status_msg, "🚨 سێرڤەری Google بە تەواوی وەستا! گواستنەوەی خێرا بۆ سێرڤەری یەدەگی Groq...")
+            time.sleep(2)
+            translated, cur_groq_idx = translate_with_groq(groq_keys, cur_groq_idx, transcript_chunk, GROQ_FALLBACKS[0], status_msg)
+            if translated: return translated, cur_gem_idx, cur_groq_idx
+
+    return [], cur_gem_idx, cur_groq_idx
