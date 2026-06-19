@@ -1,4 +1,3 @@
-
 import os
 import re
 import time
@@ -11,11 +10,11 @@ import streamlit as st
 import streamlit.components.v1 as components
 from faster_whisper import WhisperModel
 
-# ── هێێنانی مێشکی وەرگێڕان لە فایلەکەی کڵاودەوە ──
-from ai_translator import gemini_translate
+# ── هێێنانی مێشکی وەرگێڕان ──
+from ai_translator import ai_translate
 
 # ═══════════════════════════════════════════════════════════════════
-#  AUTO-GENERATE STREAMLIT CONFIG  (700 MB upload)
+#  AUTO-GENERATE STREAMLIT CONFIG
 # ═══════════════════════════════════════════════════════════════════
 APP_DIR  = os.path.dirname(os.path.abspath(__file__))
 ROOT_DIR = os.path.dirname(APP_DIR)
@@ -24,7 +23,7 @@ _CFG_DIR  = os.path.join(APP_DIR, ".streamlit")
 _CFG_FILE = os.path.join(_CFG_DIR, "config.toml")
 if not os.path.exists(_CFG_FILE):
     os.makedirs(_CFG_DIR, exist_ok=True)
-    with open(_CFG_FILE, "w", encoding="utf-8") as _f:
+    with open(_CFG_FILE, "w") as _f:
         _f.write("[server]\nmaxUploadSize = 700\n\n[browser]\ngatherUsageStats = false\n")
 
 # ═══════════════════════════════════════════════════════════════════
@@ -35,32 +34,34 @@ KU_FONT_PATH = os.path.join("/tmp", KU_FONT_FILE)
 KU_FONT_NAME = "Bahij Janna"
 MAX_SUB_DURATION = 4.0
 
-MODEL_LIST = [
+GEMINI_MODELS = [
     "gemini-3.5-flash",
-    "gemini-3-flash-preview",
     "gemini-2.5-flash",
-    "gemini-3.1-flash-lite",
+    "gemini-3-flash-preview"
 ]
 
-# 🌐 لیستی زمانە بەناوبانگەکانی جیهان بۆ فیلم و دراما بە ڕیزبەندی ئەلفابێتی (A-Z)
+GROQ_MODELS = [
+    "llama-3.3-70b-specdec",
+    "llama-4-scout",
+    "qwen-3.6-27b"
+]
+
+# لیستی گەورەی زمانە بەناوبانگەکانی جیهان (بەشی سێرچی تێدایە لە ڕووکارەکە)
 LANG_MAP = {
-    "Auto-Detect (خۆکار)": None,
-    "Arabic (عەرەبی)": "ar",
-    "Chinese (چینی)": "zh",
+    "Auto-Detect (خۆکار بدۆزەرەوە)": None,
+    "Japanese (ژاپۆنی - بۆ ئەنیمێ)": "ja",
     "English (ئینگلیزی)": "en",
-    "French (فەڕەنسی)": "fr",
-    "German (ئەڵمانی)": "de",
-    "Hindi (هیندی - بۆلیوود)": "hi",
-    "Indonesian (ئیندۆنیزی)": "id",
-    "Italian (ئیتاڵی)": "it",
-    "Japanese (ژاپۆنی - ئەنیمێ)": "ja",
-    "Korean (کۆری - دراما)": "ko",
+    "Korean (کۆری - بۆ دراما)": "ko",
     "Persian (فارسی)": "fa",
-    "Portuguese (پورتوگالی)": "pt",
-    "Russian (ڕووسی)": "ru",
+    "Arabic (عەرەبی)": "ar",
+    "Turkish (تورکی)": "tr",
+    "French (فەرەنسی)": "fr",
     "Spanish (ئیسپانی)": "es",
-    "Thai (تایلەندی)": "th",
-    "Turkish (تورکی)": "tr"
+    "Hindi (هیندی - بۆ بۆلیوود)": "hi",
+    "Russian (ڕووسی)": "ru",
+    "Chinese (چینی)": "zh",
+    "German (ئەڵمانی)": "de",
+    "Italian (ئیتاڵی)": "it"
 }
 
 THINKING_MAP = {
@@ -150,7 +151,7 @@ def validate_cues(cues: list) -> list:
     return out
 
 # ═══════════════════════════════════════════════════════════════════
-#  FASTER-WHISPER & AUDIO (Auto-Language Detection & Locking)
+#  FASTER-WHISPER & AUDIO
 # ═══════════════════════════════════════════════════════════════════
 @st.cache_resource
 def load_whisper():
@@ -219,7 +220,7 @@ def build_chunks(cues: list, minutes: float) -> list:
 # ═══════════════════════════════════════════════════════════════════
 #  ORCHESTRATOR 
 # ═══════════════════════════════════════════════════════════════════
-def process_full_video(api_keys, video_path, primary_model, thinking_budget, chunk_minutes, selected_lang=None, existing_raw=""):
+def process_full_video(provider, api_keys, video_path, primary_model, thinking_budget, chunk_minutes, selected_lang=None, existing_raw=""):
     last_sec = 0.0
     if existing_raw.strip():
         prev = parse_raw_text(existing_raw)
@@ -227,7 +228,7 @@ def process_full_video(api_keys, video_path, primary_model, thinking_budget, chu
 
     audio_path = os.path.splitext(video_path)[0] + ".wav"
 
-    with st.spinner("🎵 دەرهێنانی دەنگ و سافکردنیەتی (Audio Normalization)..."):
+    with st.spinner("🎵 دەرهێنانی دەنگ و سافکردنیەتی..."):
         extract_audio(video_path, audio_path)
 
     with st.spinner("📝 نووسینەوە (Whisper)..."):
@@ -257,7 +258,9 @@ def process_full_video(api_keys, video_path, primary_model, thinking_budget, chu
             pct = int((i / total) * 100)
             prog.progress(i / total, text=f"🔄 لە ٪{pct} ی ڤیدیۆکە تەواو بووە... ({chunk_label})")
 
-            translated, current_key_index = gemini_translate(
+            # بانگکردنی فەنکشنەکە و ناردنی جۆری سێرڤەرەکە
+            translated, current_key_index = ai_translate(
+                provider=provider,
                 api_keys=api_keys, 
                 current_key_index=current_key_index, 
                 transcript_chunk=ch, 
@@ -334,39 +337,50 @@ def auto_dl(data: bytes, name: str, mime: str):
     b64 = base64.b64encode(data).decode()
     components.html(f'<a id="xdl" href="data:{mime};base64,{b64}" download="{name}"></a><script>setTimeout(()=>document.getElementById("xdl").click(),800)</script>', height=0)
 
-# ═══════════════════════════════════════════════════════════════════
+# ══════════════════════════════════════════════════════════
 #  MAIN UI
-# ═══════════════════════════════════════════════════════════════════
+# ══════════════════════════════════════════════════════════
 def main():
     def _cleanup_sub_session():
         for k in ["sub_raw", "sub_input_path", "sub_temp_dir"]: st.session_state.pop(k, None)
         st.rerun()
 
-    st.set_page_config(page_title="🎬 Sorani Subtitle Studio", layout="wide")
+    st.set_page_config(page_title="Sorani Subtitle Studio", layout="wide")
     inject_background()
-    st.title("🎬 Kurdish Sorani Subtitle Generator")
+    st.title("🎬 Kurdish Sorani Cinematic Subtitle Generator")
 
     for k in ["sub_raw", "sub_input_path", "sub_temp_dir"]: st.session_state.setdefault(k, None)
 
     with st.sidebar:
         st.header("⚙️ ڕێکخستنەکان")
-        st.subheader("🔑 کلیلەکانی Gemini API")
-        keys = [st.text_input(f"کلیلی {i+1}", type="password", key=f"key_{i}") for i in range(4)]
-        valid_keys = [k.strip() for k in keys if k and k.strip()]
+        
+        # هەڵبژاردنی سێرڤەر بە جیا
+        provider = st.radio("کام سێرڤەر بەکاردەهێنیت؟", ["Google Gemini (جێگیر و قووڵ)", "Groq (خێراترین - Llama & Qwen)"])
 
         st.markdown("---")
-        primary_model = st.selectbox("🤖 مۆدێلی AI", MODEL_LIST, index=0)
+        if "Google Gemini" in provider:
+            st.subheader("🔑 کلیلەکانی Gemini (٣ کلیل)")
+            keys = [st.text_input(f"کلیلی جێمینای {i+1}", type="password", key=f"gemini_key_{i}") for i in range(3)]
+            valid_keys = [k.strip() for k in keys if k and k.strip()]
+            primary_model = st.selectbox("🤖 مۆدێلی گووگڵ", GEMINI_MODELS, index=0)
+        else:
+            st.subheader("⚡ کلیلەکانی Groq (٣ کلیل)")
+            keys = [st.text_input(f"کلیلی گرۆق {i+1}", type="password", key=f"groq_key_{i}") for i in range(3)]
+            valid_keys = [k.strip() for k in keys if k and k.strip()]
+            primary_model = st.selectbox("🤖 مۆدێلی مێتا/ئەلیبابا", GROQ_MODELS, index=0)
+
+        st.markdown("---")
         thinking_label = st.selectbox("🧠 جۆری بیرکردنەوە", list(THINKING_MAP.keys()), index=1)
         thinking_budget = THINKING_MAP[thinking_label]
 
-        # 🌐 لیستی زمانەکان بە ڕیزبەندی ئەلفابێتی (A-Z)
+        # 🌐 بۆکسی سێرچ بۆ زمانە جیهانییەکان
         st.markdown("---")
-        st.subheader("🌐 زمانی ڤیدیۆکە")
+        st.subheader("🌐 زمانی ڤیدیۆکە (سێرچ بکە)")
         lang_choice = st.selectbox(
-            "زمانەکە بە دەستی دیاری بکە:",
+            "زمانەکە بنووسە یان هەڵیبژێرە:",
             list(LANG_MAP.keys()),
             index=0,
-            help="ئەگەر ڤیدیۆکەت مۆسیقای یەکجار بەرزی لەسەرە، لێرەوە زمانەکەی بە دەستی قوفڵ بکە تا تووشی هیچ هەڵەیەک نەبیت."
+            help="دەتوانیت تەنها پیتێک بنووسیت بۆ ئەوەی زمانەکە بدۆزیتەوە."
         )
         selected_lang = LANG_MAP[lang_choice]
 
@@ -395,7 +409,7 @@ def main():
         with w3: wm_font_size = st.slider("📏 قەبارە", 10, 150, 30)
         with w4:
             wm_pos = st.selectbox("📍 شوێن", ["چەپ", "ڕاست"])
-            wm_align = 7 if wm_pos == "چەپ" else 9
+            wm_alignment = 7 if wm_pos == "چەپ" else 9
 
     st.markdown("---")
     delay_seconds = st.slider("⏱️ شوێنکردنەوەی کاتی ژێرنووس (چرکە)", -15.0, 15.0, 0.0, 0.05)
@@ -411,7 +425,7 @@ def main():
     if reset_btn: _cleanup_sub_session()
 
     if start_btn:
-        if not valid_keys: st.error("❌ کەمێک کلیلی Gemini بنووسە."); st.stop()
+        if not valid_keys: st.error("❌ کەمێک کلیل بنووسە لە سایدبارەکە."); st.stop()
         if not video_file: st.error("❌ ڤیدیۆ بار بکە."); st.stop()
 
         tmp = tempfile.mkdtemp()
@@ -423,14 +437,14 @@ def main():
         st.session_state.sub_input_path = in_p
         st.session_state.sub_raw = None
 
-        result = process_full_video(valid_keys, in_p, primary_model, thinking_budget, chunk_minutes, selected_lang=selected_lang)
+        result = process_full_video(provider, valid_keys, in_p, primary_model, thinking_budget, chunk_minutes, selected_lang=selected_lang)
         if result:
             st.session_state.sub_raw = result
             st.rerun()
 
     if resume_btn:
-        if not valid_keys: st.error("❌ کلیلی Gemini نوێ بنووسە."); st.stop()
-        result = process_full_video(valid_keys, st.session_state.sub_input_path, primary_model, thinking_budget, chunk_minutes, selected_lang=selected_lang, existing_raw=st.session_state.sub_raw)
+        if not valid_keys: st.error("❌ کلیلی نوێ بنووسە."); st.stop()
+        result = process_full_video(provider, valid_keys, st.session_state.sub_input_path, primary_model, thinking_budget, chunk_minutes, selected_lang=selected_lang, existing_raw=st.session_state.sub_raw)
         if result:
             st.session_state.sub_raw = result
             st.rerun()
