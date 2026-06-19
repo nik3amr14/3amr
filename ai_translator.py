@@ -22,7 +22,7 @@ class SubtitleResponse(BaseModel):
 # ═══════════════════════════════════════════════════════════════════
 #  ڕێکخستنە سەرەکییەکان
 # ═══════════════════════════════════════════════════════════════════
-MAX_ATTEMPTS_PER_MODEL = 10  
+MAX_ATTEMPTS_PER_MODEL = 5  # کەمکرایەوە بۆ ٥ بۆ ئەوەی زۆر چاوەڕێت نەکات ئەگەر کێشە هەبوو
 MAX_WAIT_TIME = 15.0        
 
 GEMINI_FALLBACKS = ["gemini-3.5-flash", "gemini-2.5-flash", "gemini-3-flash-preview"]
@@ -71,6 +71,25 @@ def _log(status_msg, message: str) -> None:
     if hasattr(status_msg, "write"): status_msg.write(message)
     elif callable(status_msg): status_msg(message)
 
+# فەنکشنی خاوێنکردنەوەی JSON کە پێشتر بە هەڵە سڕیبوومەوە!
+def extract_json(text: str) -> dict:
+    if not text: return {}
+    cleaned = text.strip()
+    fence_match = re.search(r"```(?:json)?\s*(.*?)\s*```", cleaned, re.DOTALL | re.IGNORECASE)
+    if fence_match:
+        cleaned = fence_match.group(1).strip()
+    try:
+        return json.loads(cleaned)
+    except Exception as e:
+        start = cleaned.find("{")
+        end = cleaned.rfind("}")
+        if start != -1 and end != -1:
+            try:
+                return json.loads(cleaned[start:end+1])
+            except:
+                pass
+        raise ValueError(f"نەتوانرا وەڵامەکە بخوێنرێتەوە: {e}")
+
 def _build_generation_config_gemini(thinking_budget, model_name: str):
     budget_map = {"minimal": 0, "medium": 2048, "high": -1, 0: 0, 2048: 2048, -1: -1}
     resolved_budget = budget_map.get(thinking_budget, 2048)
@@ -114,8 +133,13 @@ def translate_with_gemini(api_keys, current_key_index, transcript_chunk, thinkin
                 resp = client.models.generate_content(
                     model=model_name, contents=[user_prompt], config=generation_config
                 )
-                raw_data = json.loads(resp.text)
+                
+                # بەکارهێنانی فەنکشنە دروستەکە بۆ خوێندنەوەی وەڵامەکە
+                raw_data = extract_json(resp.text)
                 translated = raw_data.get("translations", [])
+
+                if not translated:
+                    raise ValueError("لیستی وەرگێڕان بەتاڵە.")
 
                 if len(translated) != len(transcript_chunk):
                     raise ValueError("ژمارەی دێڕەکان هاوتا نییە.")
@@ -137,7 +161,9 @@ def translate_with_gemini(api_keys, current_key_index, transcript_chunk, thinkin
                     _log(status_msg, f"🔥 گووگڵ قەرەباڵغە! چاوەڕێین بۆ {wait_time:.1f} چرکە...")
                     time.sleep(wait_time)
                 else:
-                    time.sleep(2)
+                    # ئێستا هەڵە ڕاستەقینەکە پیشان دەدات نەک درۆ بکات!
+                    _log(status_msg, f"⚠️ کێشەیەک ڕوویدا لە {model_name}: {str(e)}")
+                    time.sleep(3)
     return [], current_key_index
 
 def translate_with_groq(groq_keys, current_key_index, transcript_chunk, selected_model, status_msg):
@@ -167,8 +193,13 @@ def translate_with_groq(groq_keys, current_key_index, transcript_chunk, selected
                     temperature=0.75,
                     response_format={"type": "json_object"}
                 )
-                raw_data = json.loads(resp.choices[0].message.content)
+                
+                # بەکارهێنانی فەنکشنە دروستەکە بۆ خوێندنەوەی وەڵامەکە
+                raw_data = extract_json(resp.choices[0].message.content)
                 translated = raw_data.get("translations", [])
+
+                if not translated:
+                    raise ValueError("لیستی وەرگێڕان بەتاڵە.")
 
                 if len(translated) != len(transcript_chunk):
                     raise ValueError("ژمارەی دێڕەکان هاوتا نییە.")
@@ -185,8 +216,9 @@ def translate_with_groq(groq_keys, current_key_index, transcript_chunk, selected
                     current_key_index = (current_key_index + 1) % len(groq_keys)
                     time.sleep(1.5)
                 else:
-                    _log(status_msg, f"⚠️ سێرڤەری Groq قەرەباڵغە، هەوڵدەدەینەوە...")
-                    time.sleep(2)
+                    # ئێستا هەڵە ڕاستەقینەکە پیشان دەدات!
+                    _log(status_msg, f"⚠️ هەڵە لە سێرڤەری Groq: {str(e)}")
+                    time.sleep(3)
     return [], current_key_index
 
 # ═══════════════════════════════════════════════════════════════════
@@ -196,25 +228,18 @@ def ai_translate(provider: str, gemini_keys: list, groq_keys: list, cur_gem_idx:
     is_groq_primary = "Groq" in provider
     
     if is_groq_primary:
-        # سەرەتا هەوڵدان بە گرۆق
         if groq_keys:
             translated, cur_groq_idx = translate_with_groq(groq_keys, cur_groq_idx, transcript_chunk, selected_model, status_msg)
             if translated: return translated, cur_gem_idx, cur_groq_idx
-            
-        # ئەگەر گرۆق بە تەواوی وەستا، باز دەداتە سەر گووگڵ (Cross-Provider Fallback)
         if gemini_keys:
             _log(status_msg, "🚨 سێرڤەری Groq بە تەواوی وەستا! گواستنەوەی خێرا بۆ سێرڤەری یەدەگی Google Gemini...")
             time.sleep(2)
             translated, cur_gem_idx = translate_with_gemini(gemini_keys, cur_gem_idx, transcript_chunk, thinking_budget, GEMINI_FALLBACKS[0], status_msg)
             if translated: return translated, cur_gem_idx, cur_groq_idx
-            
     else:
-        # سەرەتا هەوڵدان بە گووگڵ
         if gemini_keys:
             translated, cur_gem_idx = translate_with_gemini(gemini_keys, cur_gem_idx, transcript_chunk, thinking_budget, selected_model, status_msg)
             if translated: return translated, cur_gem_idx, cur_groq_idx
-            
-        # ئەگەر گووگڵ بە تەواوی وەستا، باز دەداتە سەر گرۆق (Cross-Provider Fallback)
         if groq_keys:
             _log(status_msg, "🚨 سێرڤەری Google بە تەواوی وەستا! گواستنەوەی خێرا بۆ سێرڤەری یەدەگی Groq...")
             time.sleep(2)
