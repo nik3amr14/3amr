@@ -22,13 +22,14 @@ class SubtitleResponse(BaseModel):
 # ═══════════════════════════════════════════════════════════════════
 #  ڕێکخستنە سەرەکییەکان
 # ═══════════════════════════════════════════════════════════════════
-MAX_ATTEMPTS_PER_MODEL = 5  # کەمکرایەوە بۆ ٥ بۆ ئەوەی زۆر چاوەڕێت نەکات ئەگەر کێشە هەبوو
+MAX_ATTEMPTS_PER_MODEL = 10  
 MAX_WAIT_TIME = 15.0        
 
 GEMINI_FALLBACKS = ["gemini-3.5-flash", "gemini-2.5-flash", "gemini-3-flash-preview"]
-GROQ_FALLBACKS = ["llama-3.3-70b-specdec", "llama-4-scout", "qwen-3.6-27b"]
+# مۆدێلی دیپ‌سیک بۆ گرۆق زیاد کرا
+GROQ_FALLBACKS = ["deepseek-r1-distill-llama-70b", "llama-3.3-70b-versatile", "gemma2-9b-it", "llama-3.1-8b-instant"]
 
-FORBIDDEN_PUNCTUATION = "؟.،!:؛\"'-_"
+FORBIDDEN_PUNCTUATION = "؟.،!:؛\"'-_()[]{}،,+=*#$@^&|~`"
 
 # ═══════════════════════════════════════════════════════════════════
 #  مێشکی وەرگێڕان (گەنجانە، بێ سانسۆر، پاراو)
@@ -71,7 +72,6 @@ def _log(status_msg, message: str) -> None:
     if hasattr(status_msg, "write"): status_msg.write(message)
     elif callable(status_msg): status_msg(message)
 
-# فەنکشنی خاوێنکردنەوەی JSON کە پێشتر بە هەڵە سڕیبوومەوە!
 def extract_json(text: str) -> dict:
     if not text: return {}
     cleaned = text.strip()
@@ -88,11 +88,17 @@ def extract_json(text: str) -> dict:
                 return json.loads(cleaned[start:end+1])
             except:
                 pass
-        raise ValueError(f"نەتوانرا وەڵامەکە بخوێنرێتەوە: {e}")
+        raise ValueError(f"Failed to parse JSON: {e}")
+
+def _validate_translations(data: dict, expected_count: int) -> list:
+    translations = data.get("translations", [])
+    if len(translations) != expected_count:
+        raise ValueError(f"Row count mismatch: expected {expected_count}, got {len(translations)}")
+    return translations
 
 def _build_generation_config_gemini(thinking_budget, model_name: str):
-    budget_map = {"minimal": 0, "medium": 2048, "high": -1, 0: 0, 2048: 2048, -1: -1}
-    resolved_budget = budget_map.get(thinking_budget, 2048)
+    budget_map = {"minimal": 0, "medium": 8192, "high": 24576, "dynamic": -1, 0: 0, 8192: 8192, 24576: 24576, -1: -1}
+    resolved_budget = budget_map.get(thinking_budget, 8192)
 
     config_kwargs = {
         "system_instruction": SYSTEM_PROMPT,
@@ -103,7 +109,7 @@ def _build_generation_config_gemini(thinking_budget, model_name: str):
 
     if resolved_budget != 0:
         if "gemini-3" in model_name:
-            level_map = {0: "minimal", 2048: "medium", -1: "high", "minimal": "minimal", "medium": "medium", "high": "high"}
+            level_map = {0: "minimal", 8192: "medium", 24576: "high", -1: "high", "minimal": "minimal", "medium": "medium", "high": "high", "dynamic": "high"}
             resolved_level = level_map.get(thinking_budget, "medium")
             config_kwargs["thinking_config"] = types.ThinkingConfig(thinking_level=resolved_level)
         else:
@@ -114,11 +120,12 @@ def _build_generation_config_gemini(thinking_budget, model_name: str):
 def translate_with_gemini(api_keys, current_key_index, transcript_chunk, thinking_budget, selected_model, status_msg):
     if not api_keys: return [], current_key_index
     
-    models_to_try = [selected_model] if "gemini" in selected_model else [GEMINI_FALLBACKS[0]]
+    models_to_try = [selected_model]
     for m in GEMINI_FALLBACKS:
         if m not in models_to_try: models_to_try.append(m)
 
     user_prompt = f"Translate every row into natural Kurdish Sorani. Input array:\n\n{json.dumps(transcript_chunk, ensure_ascii=False)}"
+    expected = len(transcript_chunk)
 
     for model_name in models_to_try:
         generation_config = _build_generation_config_gemini(thinking_budget, model_name)
@@ -128,21 +135,19 @@ def translate_with_gemini(api_keys, current_key_index, transcript_chunk, thinkin
             attempt += 1
             try:
                 client = genai.Client(api_key=api_key)
-                _log(status_msg, f"🧠 [Google: {model_name}] - وەرگێڕان بە کلیل {current_key_index + 1}... (هەوڵی {attempt}/{MAX_ATTEMPTS_PER_MODEL})")
+                if thinking_budget == 0 or thinking_budget == "minimal":
+                    _log(status_msg, f"⚡ [Google: {model_name}] - وەرگێڕانی خێرا (هەوڵی {attempt}/{MAX_ATTEMPTS_PER_MODEL})...")
+                else:
+                    _log(status_msg, f"🧠 [Google: {model_name}] - مێشکی داینامیکی (هەوڵی {attempt}/{MAX_ATTEMPTS_PER_MODEL})...")
                 
-                resp = client.models.generate_content(
+                response = client.models.generate_content(
                     model=model_name, contents=[user_prompt], config=generation_config
                 )
                 
-                # بەکارهێنانی فەنکشنە دروستەکە بۆ خوێندنەوەی وەڵامەکە
-                raw_data = extract_json(resp.text)
-                translated = raw_data.get("translations", [])
-
-                if not translated:
-                    raise ValueError("لیستی وەرگێڕان بەتاڵە.")
-
-                if len(translated) != len(transcript_chunk):
-                    raise ValueError("ژمارەی دێڕەکان هاوتا نییە.")
+                raw_text = response.text or ""
+                raw_text = _clean_json_text(raw_text)
+                data = extract_json(raw_text)
+                translated = _validate_translations(data, expected)
 
                 for original, item in zip(transcript_chunk, translated):
                     item["start"] = original.get("start")
@@ -153,27 +158,27 @@ def translate_with_gemini(api_keys, current_key_index, transcript_chunk, thinkin
 
             except Exception as e:
                 err_str = str(e).lower()
-                if "429" in err_str or "resource_exhausted" in err_str:
-                    current_key_index = (current_key_index + 1) % len(api_keys)
+                if "429" in err_str or "resource_exhausted" in err_str or "quota" in err_str:
+                    current_key_index = (current_key_index + 1) % max(len(api_keys), 1)
                     time.sleep(1.5)
-                elif "503" in err_str or "unavailable" in err_str:
+                elif "503" in err_str or "unavailable" in err_str or "overloaded" in err_str:
                     wait_time = min(MAX_WAIT_TIME, (2 ** attempt) + random.uniform(0.5, 2.0))
                     _log(status_msg, f"🔥 گووگڵ قەرەباڵغە! چاوەڕێین بۆ {wait_time:.1f} چرکە...")
                     time.sleep(wait_time)
                 else:
-                    # ئێستا هەڵە ڕاستەقینەکە پیشان دەدات نەک درۆ بکات!
-                    _log(status_msg, f"⚠️ کێشەیەک ڕوویدا لە {model_name}: {str(e)}")
+                    _log(status_msg, f"⚠️ کێشەیەک ڕوویدا لە {model_name}: {str(e)[:100]}")
                     time.sleep(3)
     return [], current_key_index
 
 def translate_with_groq(groq_keys, current_key_index, transcript_chunk, selected_model, status_msg):
     if not groq_keys: return [], current_key_index
     
-    models_to_try = [selected_model] if ("llama" in selected_model or "qwen" in selected_model) else [GROQ_FALLBACKS[0]]
+    models_to_try = [selected_model]
     for m in GROQ_FALLBACKS:
         if m not in models_to_try: models_to_try.append(m)
 
     user_prompt = f"Translate this subtitle JSON exactly into clean, unpunctuated Kurdish Sorani. Do NOT add any markdown, return only the JSON:\n\n{json.dumps(transcript_chunk, ensure_ascii=False)}"
+    expected = len(transcript_chunk)
     
     for model_name in models_to_try:
         attempt = 0
@@ -194,15 +199,10 @@ def translate_with_groq(groq_keys, current_key_index, transcript_chunk, selected
                     response_format={"type": "json_object"}
                 )
                 
-                # بەکارهێنانی فەنکشنە دروستەکە بۆ خوێندنەوەی وەڵامەکە
-                raw_data = extract_json(resp.choices[0].message.content)
-                translated = raw_data.get("translations", [])
-
-                if not translated:
-                    raise ValueError("لیستی وەرگێڕان بەتاڵە.")
-
-                if len(translated) != len(transcript_chunk):
-                    raise ValueError("ژمارەی دێڕەکان هاوتا نییە.")
+                raw_text = resp.choices[0].message.content or ""
+                raw_text = _clean_json_text(raw_text)
+                data = extract_json(raw_text)
+                translated = _validate_translations(data, expected)
 
                 for original, item in zip(transcript_chunk, translated):
                     item["start"] = original.get("start")
@@ -212,38 +212,41 @@ def translate_with_groq(groq_keys, current_key_index, transcript_chunk, selected
                 return translated, current_key_index
             except Exception as e:
                 err_str = str(e).lower()
-                if "429" in err_str or "rate_limit" in err_str:
-                    current_key_index = (current_key_index + 1) % len(groq_keys)
+                if "429" in err_str or "rate_limit" in err_str or "quota" in err_str:
+                    current_key_index = (current_key_index + 1) % max(len(groq_keys), 1)
                     time.sleep(1.5)
+                elif "503" in err_str or "unavailable" in err_str or "overloaded" in err_str:
+                    wait_time = min(MAX_WAIT_TIME, (2 ** attempt) + random.uniform(0.5, 2.0))
+                    _log(status_msg, f"🔥 گرۆق قەرەباڵغە! چاوەڕێین بۆ {wait_time:.1f} چرکە...")
+                    time.sleep(wait_time)
                 else:
-                    # ئێستا هەڵە ڕاستەقینەکە پیشان دەدات!
-                    _log(status_msg, f"⚠️ هەڵە لە سێرڤەری Groq: {str(e)}")
+                    _log(status_msg, f"⚠️ هەڵە لە سێرڤەری Groq: {str(e)[:100]}")
                     time.sleep(3)
     return [], current_key_index
 
 # ═══════════════════════════════════════════════════════════════════
 #  دەروازەی سەرەکی وەرگێڕان (Multi-Cloud Orchestrator)
 # ═══════════════════════════════════════════════════════════════════
-def ai_translate(provider: str, gemini_keys: list, groq_keys: list, cur_gem_idx: int, cur_groq_idx: int, transcript_chunk: list, thinking_budget, selected_model: str, status_msg) -> tuple[list, int, int]:
+def ai_translate(provider: str, gemini_keys: list, groq_keys: list, cur_gem_idx: int, cur_groq_idx: int, transcript_chunk: list, thinking_budget, gemini_model: str, groq_model: str, status_msg) -> tuple[list, int, int]:
     is_groq_primary = "Groq" in provider
     
     if is_groq_primary:
         if groq_keys:
-            translated, cur_groq_idx = translate_with_groq(groq_keys, cur_groq_idx, transcript_chunk, selected_model, status_msg)
+            translated, cur_groq_idx = translate_with_groq(groq_keys, cur_groq_idx, transcript_chunk, groq_model, status_msg)
             if translated: return translated, cur_gem_idx, cur_groq_idx
         if gemini_keys:
             _log(status_msg, "🚨 سێرڤەری Groq بە تەواوی وەستا! گواستنەوەی خێرا بۆ سێرڤەری یەدەگی Google Gemini...")
             time.sleep(2)
-            translated, cur_gem_idx = translate_with_gemini(gemini_keys, cur_gem_idx, transcript_chunk, thinking_budget, GEMINI_FALLBACKS[0], status_msg)
+            translated, cur_gem_idx = translate_with_gemini(gemini_keys, cur_gem_idx, transcript_chunk, thinking_budget, gemini_model, status_msg)
             if translated: return translated, cur_gem_idx, cur_groq_idx
     else:
         if gemini_keys:
-            translated, cur_gem_idx = translate_with_gemini(gemini_keys, cur_gem_idx, transcript_chunk, thinking_budget, selected_model, status_msg)
+            translated, cur_gem_idx = translate_with_gemini(gemini_keys, cur_gem_idx, transcript_chunk, thinking_budget, gemini_model, status_msg)
             if translated: return translated, cur_gem_idx, cur_groq_idx
         if groq_keys:
             _log(status_msg, "🚨 سێرڤەری Google بە تەواوی وەستا! گواستنەوەی خێرا بۆ سێرڤەری یەدەگی Groq...")
             time.sleep(2)
-            translated, cur_groq_idx = translate_with_groq(groq_keys, cur_groq_idx, transcript_chunk, GROQ_FALLBACKS[0], status_msg)
+            translated, cur_groq_idx = translate_with_groq(groq_keys, cur_groq_idx, transcript_chunk, groq_model, status_msg)
             if translated: return translated, cur_gem_idx, cur_groq_idx
 
     return [], cur_gem_idx, cur_groq_idx
