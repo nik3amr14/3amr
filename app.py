@@ -1,3 +1,4 @@
+
 import os
 import re
 import time
@@ -14,7 +15,7 @@ from faster_whisper import WhisperModel
 from ai_translator import gemini_translate
 
 # ═══════════════════════════════════════════════════════════════════
-#  AUTO-GENERATE STREAMLIT CONFIG
+#  AUTO-GENERATE STREAMLIT CONFIG  (700 MB upload)
 # ═══════════════════════════════════════════════════════════════════
 APP_DIR  = os.path.dirname(os.path.abspath(__file__))
 ROOT_DIR = os.path.dirname(APP_DIR)
@@ -23,7 +24,7 @@ _CFG_DIR  = os.path.join(APP_DIR, ".streamlit")
 _CFG_FILE = os.path.join(_CFG_DIR, "config.toml")
 if not os.path.exists(_CFG_FILE):
     os.makedirs(_CFG_DIR, exist_ok=True)
-    with open(_CFG_FILE, "w") as _f:
+    with open(_CFG_FILE, "w", encoding="utf-8") as _f:
         _f.write("[server]\nmaxUploadSize = 700\n\n[browser]\ngatherUsageStats = false\n")
 
 # ═══════════════════════════════════════════════════════════════════
@@ -41,13 +42,25 @@ MODEL_LIST = [
     "gemini-3.1-flash-lite",
 ]
 
-# مۆدی زمانە فەرمییەکان بۆ لۆجیکی قوفڵکردن [25]
+# 🌐 لیستی زمانە بەناوبانگەکانی جیهان بۆ فیلم و دراما بە ڕیزبەندی ئەلفابێتی (A-Z)
 LANG_MAP = {
-    "Auto-Detect (خۆکارانە بدۆزەرەوە)": None,
-    "Japanese (ژاپۆنی)": "ja",
+    "Auto-Detect (خۆکار)": None,
+    "Arabic (عەرەبی)": "ar",
+    "Chinese (چینی)": "zh",
     "English (ئینگلیزی)": "en",
+    "French (فەڕەنسی)": "fr",
+    "German (ئەڵمانی)": "de",
+    "Hindi (هیندی - بۆلیوود)": "hi",
+    "Indonesian (ئیندۆنیزی)": "id",
+    "Italian (ئیتاڵی)": "it",
+    "Japanese (ژاپۆنی - ئەنیمێ)": "ja",
+    "Korean (کۆری - دراما)": "ko",
     "Persian (فارسی)": "fa",
-    "Arabic (عەرەبی)": "ar"
+    "Portuguese (پورتوگالی)": "pt",
+    "Russian (ڕووسی)": "ru",
+    "Spanish (ئیسپانی)": "es",
+    "Thai (تایلەندی)": "th",
+    "Turkish (تورکی)": "tr"
 }
 
 THINKING_MAP = {
@@ -149,7 +162,6 @@ def extract_audio(video_path: str, audio_path: str):
 def transcribe_audio(audio_path: str, selected_lang: str = None) -> list:
     model = load_whisper()
     
-    # ناسینەوە و قفڵکردنی خۆکارانەی زمانی ڤیدیۆ پێش دەستپێکردنی وەرگێڕان [25]
     if not selected_lang:
         _, info = model.transcribe(audio_path, beam_size=1)
         detected_lang = info.language
@@ -208,13 +220,17 @@ def build_chunks(cues: list, minutes: float) -> list:
 #  ORCHESTRATOR 
 # ═══════════════════════════════════════════════════════════════════
 def process_full_video(api_keys, video_path, primary_model, thinking_budget, chunk_minutes, selected_lang=None, existing_raw=""):
-    audio_path = video_path.replace(".mp4", ".wav")
-    last_translated_sec = parse_existing_raw_to_last_time(existing_raw)
-    
-    with st.spinner("🎵 خەریکی دەرهێنانی دەنگ و سافکردنیەتی (Audio Normalization)..."):
+    last_sec = 0.0
+    if existing_raw.strip():
+        prev = parse_raw_text(existing_raw)
+        if prev: last_sec = secs(prev[-1]["end"])
+
+    audio_path = os.path.splitext(video_path)[0] + ".wav"
+
+    with st.spinner("🎵 دەرهێنانی دەنگ و سافکردنیەتی (Audio Normalization)..."):
         extract_audio(video_path, audio_path)
 
-    with st.spinner("📝 خەریکی نووسینەوەی دەنگەکەیە بە وردی (Faster-Whisper)..."):
+    with st.spinner("📝 نووسینەوە (Whisper)..."):
         cues = transcribe_audio(audio_path, selected_lang=selected_lang)
         try: os.remove(audio_path)
         except: pass
@@ -241,7 +257,6 @@ def process_full_video(api_keys, video_path, primary_model, thinking_budget, chu
             pct = int((i / total) * 100)
             prog.progress(i / total, text=f"🔄 لە ٪{pct} ی ڤیدیۆکە تەواو بووە... ({chunk_label})")
 
-            # بانگکردنی فەنکشنەکە لە فایلەکەی کڵاودەوە
             translated, current_key_index = gemini_translate(
                 api_keys=api_keys, 
                 current_key_index=current_key_index, 
@@ -319,15 +334,15 @@ def auto_dl(data: bytes, name: str, mime: str):
     b64 = base64.b64encode(data).decode()
     components.html(f'<a id="xdl" href="data:{mime};base64,{b64}" download="{name}"></a><script>setTimeout(()=>document.getElementById("xdl").click(),800)</script>', height=0)
 
-# ══════════════════════════════════════════════════════════
+# ═══════════════════════════════════════════════════════════════════
 #  MAIN UI
-# ══════════════════════════════════════════════════════════
+# ═══════════════════════════════════════════════════════════════════
 def main():
     def _cleanup_sub_session():
         for k in ["sub_raw", "sub_input_path", "sub_temp_dir"]: st.session_state.pop(k, None)
         st.rerun()
 
-    st.set_page_config(page_title="Sorani Subtitle Studio", layout="wide")
+    st.set_page_config(page_title="🎬 Sorani Subtitle Studio", layout="wide")
     inject_background()
     st.title("🎬 Kurdish Sorani Subtitle Generator")
 
@@ -344,14 +359,14 @@ def main():
         thinking_label = st.selectbox("🧠 جۆری بیرکردنەوە", list(THINKING_MAP.keys()), index=1)
         thinking_budget = THINKING_MAP[thinking_label]
 
-        # 🌐 سایدباری هەڵبژاردنی زمان بە ڕیزبەندی ئەلفابێتی زۆر خاوێن
+        # 🌐 لیستی زمانەکان بە ڕیزبەندی ئەلفابێتی (A-Z)
         st.markdown("---")
         st.subheader("🌐 زمانی ڤیدیۆکە")
         lang_choice = st.selectbox(
             "زمانەکە بە دەستی دیاری بکە:",
             list(LANG_MAP.keys()),
             index=0,
-            help="دەتوانیت پیت بنووسیت بۆ گەڕانی خێرا بەدوای زمانەکەدا."
+            help="ئەگەر ڤیدیۆکەت مۆسیقای یەکجار بەرزی لەسەرە، لێرەوە زمانەکەی بە دەستی قوفڵ بکە تا تووشی هیچ هەڵەیەک نەبیت."
         )
         selected_lang = LANG_MAP[lang_choice]
 
@@ -376,11 +391,11 @@ def main():
     with st.expander("🎨 واتەرمارک", expanded=False):
         w1, w2, w3, w4 = st.columns(4)
         with w1: wm_text = st.text_input("📝 نووسینی واتەرمارک")
-        with w2: wm_color = st.color_picker("🎨 ڕەنگی لۆگۆ", "#FFFFFF")
+        with w2: wm_color = st.color_picker("🎨 ڕەنگ", "#FFFFFF")
         with w3: wm_font_size = st.slider("📏 قەبارە", 10, 150, 30)
         with w4:
             wm_pos = st.selectbox("📍 شوێن", ["چەپ", "ڕاست"])
-            wm_alignment = 7 if wm_pos == "چەپ" else 9
+            wm_align = 7 if wm_pos == "چەپ" else 9
 
     st.markdown("---")
     delay_seconds = st.slider("⏱️ شوێنکردنەوەی کاتی ژێرنووس (چرکە)", -15.0, 15.0, 0.0, 0.05)
