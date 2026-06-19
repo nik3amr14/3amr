@@ -1,15 +1,15 @@
 import json
 import re
 import time
-import math
 import random
 from pydantic import BaseModel
 
 from google import genai
 from google.genai import types
+from groq import Groq
 
 # ═══════════════════════════════════════════════════════════════════
-#  ١. قوفڵکردنی شێوازی وەڵام بە قالبێکی بیرکاری (Pydantic Schema) [2.1]
+#  ١. قوفڵکردنی شێوازی وەڵام بە قالبێکی بیرکاری (Pydantic Schema)
 # ═══════════════════════════════════════════════════════════════════
 class SubtitleItem(BaseModel):
     start: float
@@ -20,74 +20,48 @@ class SubtitleResponse(BaseModel):
     translations: list[SubtitleItem]
 
 # ═══════════════════════════════════════════════════════════════════
-#  ڕێکخستنی کاتەکانی پشوودان
+#  ڕێکخستنە سەرەکییەکان
 # ═══════════════════════════════════════════════════════════════════
-MAX_ATTEMPTS_PER_MODEL = 6  
+MAX_ATTEMPTS_PER_MODEL = 10  
 MAX_WAIT_TIME = 15.0        
 
-FALLBACK_MODELS = ["gemini-3.5-flash", "gemini-2.5-flash", "gemini-3-flash-preview"]
+GEMINI_FALLBACKS = ["gemini-3.5-flash", "gemini-2.5-flash", "gemini-3-flash-preview"]
+GROQ_FALLBACKS = ["llama-3.3-70b-specdec", "llama-4-scout", "qwen-3.6-27b"]
+
 FORBIDDEN_PUNCTUATION = "؟.،!:؛\"'-_"
 
 # ═══════════════════════════════════════════════════════════════════
-#  مێشکی وەرگێڕان (System Prompt)
+#  مێشکی وەرگێڕان - گەنجانە، پاراو، بێ سانسۆر، و ڕێک وەک دەمی کارەکتەر
 # ═══════════════════════════════════════════════════════════════════
-SYSTEM_PROMPT = """You are an elite professional Kurdish Sorani cinematic subtitle translator.
+SYSTEM_PROMPT = """You are an elite Kurdish Sorani cinematic subtitle translator.
+Your goal is to translate the dialogue exactly as the character speaks it, making it sound natural, youthful, and relatable to a Kurdish audience.
 
-Your objective is to translate the spoken text into natural, cinematic Kurdish Sorani.
-Follow these rules strictly:
-
-1. EXACT TRANSLATION OF SPOKEN WORDS (NO CENSORSHIP):
-   - Translate exactly what the character says with 100% honesty and accuracy.
-   - Do NOT be shy, do NOT censor, and do NOT soften the tone. If a character swears, uses raw slang, or speaks vulgarly, translate it exactly as they said it with equal intensity.
-   - NEVER add unnecessary politeness, and do NOT alter the character's core personality.
-
-2. AVOID OVERUSING HONORIFICS ("کاک" / "خاتوون"):
-   - Do NOT translate Japanese honorifics (like "-san", "-kun", "-sama") or English titles (like "Mr.") literally as "کاک" or "خاتوون" unless it is a highly formal business or government setting.
-   - In casual, friendly, or cool conversations, completely ignore these honorifics and use the character's name directly (e.g. translate "Sasaki-san" as "ساساکی", NOT "کاک ساساکی").
-
-3. NO LITERAL TRANSLATION:
-   - Capture the true spoken meaning.
-   - Maintain natural Kurdish grammar (Subject-Object-Verb). For example, do NOT write "ئێستا بە دەستی تۆیە هەموو شتێک", instead write "ئێستا هەموو شتێک لە دەستی تۆدایە".
-
-4. TIMESTAMPS:
-   - Keep "start" and "end" timestamps exactly as provided. Do not alter them.
-
-5. NO PUNCTUATION:
-   - Completely strip all punctuation (؟ . ، ! : ؛ " ' - _) from the translated text. Output only clean words.
-
-6. ROW ALIGNMENT:
-   - Translate EVERY single row. The output JSON array must have the exact same number of items as the input.
+Strict Rules:
+1. EXACT & UNCENSORED: Translate exactly what they mean. Do NOT censor swear words, slang, or raw emotions. If they speak like a cool youth, translate it into cool, modern Kurdish Sorani youth language.
+2. NO ROBOTIC/LITERAL TRANSLATION: Do not translate word-for-word. Use natural Kurdish phrasing.
+3. NO HONORIFICS IN CASUAL SPEECH: Do NOT use "کاک" or "خاتوون" for "-san", "-kun", or "Mr." unless it is a highly strict formal/business setting. Just use their names.
+4. TIMESTAMPS: Keep "start" and "end" timestamps EXACTLY as provided. Do not change 0.01 seconds.
+5. NO PUNCTUATION: Completely strip all punctuation (؟ . ، ! : ؛ " ' - _) from the translated text. Output only clean words.
+6. ROW ALIGNMENT: You MUST translate EVERY single row. Do not skip whispers, sighs, or short words. The output array length must perfectly match the input array length.
 """
 
 def _strip_forbidden_punctuation(text: str) -> str:
-    if not isinstance(text, str):
-        return text
-    for ch in FORBIDDEN_PUNCTUATION:
-        text = text.replace(ch, "")
+    if not isinstance(text, str): return text
+    for ch in FORBIDDEN_PUNCTUATION: text = text.replace(ch, "")
     return text
 
 def _log(status_msg, message: str) -> None:
-    if status_msg is None:
-        return
-    if hasattr(status_msg, "write"):
-        status_msg.write(message)
-    elif callable(status_msg):
-        status_msg(message)
+    if status_msg is None: return
+    if hasattr(status_msg, "write"): status_msg.write(message)
+    elif callable(status_msg): status_msg(message)
 
-def _build_model_list(selected_model: str) -> list:
-    models_to_try = [selected_model]
-    for model_name in FALLBACK_MODELS:
-        if model_name not in models_to_try:
-            models_to_try.append(model_name)
-    return models_to_try
-
-def _build_generation_config(thinking_budget, model_name: str):
+def _build_generation_config_gemini(thinking_budget, model_name: str):
     budget_map = {"minimal": 0, "medium": 2048, "high": -1, 0: 0, 2048: 2048, -1: -1}
     resolved_budget = budget_map.get(thinking_budget, 2048)
 
     config_kwargs = {
         "system_instruction": SYSTEM_PROMPT,
-        "temperature": 0.75, # گەرمی لەسەر باشترین هاوسەنگی جێگیرکرا
+        "temperature": 0.75,
         "response_mime_type": "application/json",
         "response_schema": SubtitleResponse
     }
@@ -103,44 +77,29 @@ def _build_generation_config(thinking_budget, model_name: str):
     return types.GenerateContentConfig(**config_kwargs)
 
 # ═══════════════════════════════════════════════════════════════════
-#  مۆتۆڕی سەرەکی وەرگێڕان (Main Engine with Exponential Backoff with Jitter)
+#  مۆتۆڕی وەرگێڕانی جێمینای لای گووگڵ (Google Gemini Engine)
 # ═══════════════════════════════════════════════════════════════════
-def gemini_translate(api_keys: list, current_key_index: int, transcript_chunk: list, thinking_budget, selected_model: str, status_msg) -> tuple[list, int]:
-    if not api_keys:
-        raise ValueError("api_keys is empty.")
-    if not transcript_chunk:
-        return [], current_key_index
+def translate_with_gemini(api_keys, current_key_index, transcript_chunk, thinking_budget, selected_model, status_msg):
+    models_to_try = [selected_model]
+    for m in GEMINI_FALLBACKS:
+        if m not in models_to_try: models_to_try.append(m)
 
-    models_to_try = _build_model_list(selected_model)
-    
-    formatted_chunk = [{"start": c["start"], "end": c["end"], "text": c["text"]} for c in transcript_chunk]
-    user_prompt = f"Translate the following transcript exactly. Input array:\n\n{json.dumps(formatted_chunk, ensure_ascii=False)}"
-
-    last_error = None
+    user_prompt = f"Translate every row into natural, youthful Kurdish Sorani. Input array:\n\n{json.dumps(transcript_chunk, ensure_ascii=False)}"
 
     for model_name in models_to_try:
-        generation_config = _build_generation_config(thinking_budget, model_name)
+        generation_config = _build_generation_config_gemini(thinking_budget, model_name)
         attempt = 0
-
         while attempt < MAX_ATTEMPTS_PER_MODEL:
             api_key = api_keys[current_key_index % len(api_keys)]
             attempt += 1
-
             try:
                 client = genai.Client(api_key=api_key)
+                _log(status_msg, f"🧠 [Google: {model_name}] - وەرگێڕان بە کلیل {current_key_index + 1}... (هەوڵی {attempt}/{MAX_ATTEMPTS_PER_MODEL})")
                 
-                if thinking_budget == 0 or thinking_budget == "minimal":
-                    _log(status_msg, f"⚡ [{model_name}] - وەرگێڕانی خێرا (هەوڵی {attempt}/{MAX_ATTEMPTS_PER_MODEL})...")
-                else:
-                    _log(status_msg, f"🧠 [{model_name}] - مێشکی زیرەک (هەوڵی {attempt}/{MAX_ATTEMPTS_PER_MODEL})...")
-
-                response = client.models.generate_content(
-                    model=model_name,
-                    contents=user_prompt,
-                    config=generation_config,
+                resp = client.models.generate_content(
+                    model=model_name, contents=[user_prompt], config=generation_config
                 )
-
-                raw_data = json.loads(response.text)
+                raw_data = json.loads(resp.text)
                 translated = raw_data.get("translations", [])
 
                 if len(translated) != len(transcript_chunk):
@@ -151,31 +110,79 @@ def gemini_translate(api_keys: list, current_key_index: int, transcript_chunk: l
                     item["end"] = original.get("end")
                     item["text"] = _strip_forbidden_punctuation(item.get("text", ""))
 
-                _log(status_msg, f"Success with {model_name}.")
                 return translated, current_key_index
 
-            except Exception as exc:
-                last_error = exc
-                error_text = str(exc).lower()
-
-                if "429" in error_text or "resource_exhausted" in error_text or "quota" in error_text:
+            except Exception as e:
+                err_str = str(e).lower()
+                if "429" in err_str or "resource_exhausted" in err_str:
                     current_key_index = (current_key_index + 1) % len(api_keys)
-                    _log(status_msg, f"⚠️ کلیلەکە ماندوو بوو. گۆڕدرا بۆ کلیلی ژمارە {current_key_index + 1}...")
                     time.sleep(1.5)
-                    continue 
-
-                if "503" in error_text or "unavailable" in error_text or "overloaded" in error_text:
-                    # بەکارهێنانی فۆرمولەی داینامیکی بیرکاری (Exponential Backoff with Jitter)
+                elif "503" in err_str or "unavailable" in err_str:
                     wait_time = min(MAX_WAIT_TIME, (2 ** attempt) + random.uniform(0.5, 2.0))
-                    _log(status_msg, f"🔥 سێرڤەری {model_name} قەرەباڵغە! چاوەڕێ دەکەین بۆ {wait_time:.1f} چرکە...")
+                    _log(status_msg, f"🔥 گووگڵ قەرەباڵغە! چاوەڕێین بۆ {wait_time:.1f} چرکە...")
                     time.sleep(wait_time)
-                    continue
+                else:
+                    time.sleep(2)
+    return [], current_key_index
 
-                _log(status_msg, f"⏳ کێشەیەک ڕوویدا، دووبارە تاقیدەکەینەوە... (هەوڵی {attempt})")
-                time.sleep(2)
-                continue
+# ═══════════════════════════════════════════════════════════════════
+#  مۆتۆڕی وەرگێڕانی گرۆق لای مێتا/ئەلیبابا (Groq Engine)
+# ═══════════════════════════════════════════════════════════════════
+def translate_with_groq(groq_keys, current_key_index, transcript_chunk, selected_model, status_msg):
+    models_to_try = [selected_model]
+    for m in GROQ_FALLBACKS:
+        if m not in models_to_try: models_to_try.append(m)
 
-        _log(status_msg, f"⚠️ مۆدێلی {model_name} وەڵامی نەدایەوە. دەچینە سەر مۆدێلی یەدەگ...")
-        time.sleep(1)
+    user_prompt = f"Translate this subtitle JSON exactly into clean, unpunctuated, natural Kurdish Sorani. Do NOT add any markdown, return ONLY the JSON:\n\n{json.dumps(transcript_chunk, ensure_ascii=False)}"
+    
+    for model_name in models_to_try:
+        attempt = 0
+        while attempt < MAX_ATTEMPTS_PER_MODEL:
+            cur_key = groq_keys[current_key_index % len(groq_keys)]
+            attempt += 1
+            try:
+                client = Groq(api_key=cur_key)
+                _log(status_msg, f"⚡ [Groq: {model_name}] - وەرگێڕانی خێرا بە کلیل {current_key_index + 1}... (هەوڵی {attempt})")
+                
+                resp = client.chat.completions.create(
+                    messages=[
+                        {"role": "system", "content": SYSTEM_PROMPT + "\nOutput must be a JSON object with key 'translations': [{'start':float, 'end':float, 'text':string}]"},
+                        {"role": "user", "content": user_prompt}
+                    ],
+                    model=model_name,
+                    temperature=0.75,
+                    response_format={"type": "json_object"} 
+                )
+                raw_data = json.loads(resp.choices[0].message.content)
+                translated = raw_data.get("translations", [])
 
-    raise RuntimeError(f"All models exhausted. Last error: {last_error}")
+                if len(translated) != len(transcript_chunk):
+                    raise ValueError("ژمارەی دێڕەکان هاوتا نییە.")
+
+                for original, item in zip(transcript_chunk, translated):
+                    item["start"] = original.get("start")
+                    item["end"] = original.get("end")
+                    item["text"] = _strip_forbidden_punctuation(item.get("text", ""))
+
+                return translated, current_key_index
+
+            except Exception as e:
+                err_str = str(e).lower()
+                if "429" in err_str or "rate_limit" in err_str:
+                    current_key_index = (current_key_index + 1) % len(groq_keys)
+                    time.sleep(1.5)
+                else:
+                    wait_time = min(MAX_WAIT_TIME, (2 ** attempt) + random.uniform(0.5, 2.0))
+                    _log(status_msg, f"⚠️ سێرڤەری Groq قەرەباڵغە، چاوەڕێین بۆ {wait_time:.1f} چرکە...")
+                    time.sleep(wait_time)
+                    
+    return [], current_key_index
+
+# ═══════════════════════════════════════════════════════════════════
+#  دەروازەی سەرەکی وەرگێڕان (Orchestrator Gateway)
+# ═══════════════════════════════════════════════════════════════════
+def ai_translate(provider: str, api_keys: list, current_key_index: int, transcript_chunk: list, thinking_budget, selected_model: str, status_msg) -> tuple[list, int]:
+    if provider == "Groq (خێراترین - Llama & Qwen)":
+        return translate_with_groq(api_keys, current_key_index, transcript_chunk, selected_model, status_msg)
+    else:
+        return translate_with_gemini(api_keys, current_key_index, transcript_chunk, thinking_budget, selected_model, status_msg)
