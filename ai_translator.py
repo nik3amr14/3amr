@@ -93,7 +93,9 @@ def _build_generation_config_gemini(thinking_budget, model_name: str):
     return types.GenerateContentConfig(**config_kwargs)
 
 def translate_with_gemini(api_keys, current_key_index, transcript_chunk, thinking_budget, selected_model, status_msg):
-    models_to_try = [selected_model]
+    if not api_keys: return [], current_key_index
+    
+    models_to_try = [selected_model] if "gemini" in selected_model else [GEMINI_FALLBACKS[0]]
     for m in GEMINI_FALLBACKS:
         if m not in models_to_try: models_to_try.append(m)
 
@@ -139,7 +141,9 @@ def translate_with_gemini(api_keys, current_key_index, transcript_chunk, thinkin
     return [], current_key_index
 
 def translate_with_groq(groq_keys, current_key_index, transcript_chunk, selected_model, status_msg):
-    models_to_try = [selected_model]
+    if not groq_keys: return [], current_key_index
+    
+    models_to_try = [selected_model] if ("llama" in selected_model or "qwen" in selected_model) else [GROQ_FALLBACKS[0]]
     for m in GROQ_FALLBACKS:
         if m not in models_to_try: models_to_try.append(m)
 
@@ -161,7 +165,7 @@ def translate_with_groq(groq_keys, current_key_index, transcript_chunk, selected
                     ],
                     model=model_name,
                     temperature=0.75,
-                    response_format={"type": "json_object"} 
+                    response_format={"type": "json_object"}
                 )
                 raw_data = json.loads(resp.choices[0].message.content)
                 translated = raw_data.get("translations", [])
@@ -186,11 +190,12 @@ def translate_with_groq(groq_keys, current_key_index, transcript_chunk, selected
     return [], current_key_index
 
 # ═══════════════════════════════════════════════════════════════════
-#  دەروازەی سەرەکی وەرگێڕان (Orchestrator Gateway)
+#  دەروازەی سەرەکی وەرگێڕان (Multi-Cloud Orchestrator)
 # ═══════════════════════════════════════════════════════════════════
-def ai_translate(provider: str, gemini_keys: list, groq_keys: list, cur_gem_idx: int, cur_groq_idx: int, transcript_chunk: list, thinking_budget, selected_model: str, status_msg):
+def ai_translate(provider: str, gemini_keys: list, groq_keys: list, cur_gem_idx: int, cur_groq_idx: int, transcript_chunk: list, thinking_budget, selected_model: str, status_msg) -> tuple[list, int, int]:
+    is_groq_primary = "Groq" in provider
     
-    if "Groq" in provider:
+    if is_groq_primary:
         # سەرەتا هەوڵدان بە گرۆق
         if groq_keys:
             translated, cur_groq_idx = translate_with_groq(groq_keys, cur_groq_idx, transcript_chunk, selected_model, status_msg)
