@@ -10,7 +10,7 @@ import streamlit as st
 import streamlit.components.v1 as components
 from faster_whisper import WhisperModel
 
-# ── هێێنانی مێشکی وەرگێڕان ──
+# ── بانگکردنی مێشکی وەرگێڕان بە شێوەیەکی دروست ──
 from ai_translator import ai_translate
 
 # ═══════════════════════════════════════════════════════════════════
@@ -46,7 +46,6 @@ GROQ_MODELS = [
     "qwen-3.6-27b"
 ]
 
-# لیستی گەورەی زمانە بەناوبانگەکانی جیهان (بەشی سێرچی تێدایە لە ڕووکارەکە)
 LANG_MAP = {
     "Auto-Detect (خۆکار بدۆزەرەوە)": None,
     "Japanese (ژاپۆنی - بۆ ئەنیمێ)": "ja",
@@ -258,7 +257,6 @@ def process_full_video(provider, api_keys, video_path, primary_model, thinking_b
             pct = int((i / total) * 100)
             prog.progress(i / total, text=f"🔄 لە ٪{pct} ی ڤیدیۆکە تەواو بووە... ({chunk_label})")
 
-            # بانگکردنی فەنکشنەکە و ناردنی جۆری سێرڤەرەکە
             translated, current_key_index = ai_translate(
                 provider=provider,
                 api_keys=api_keys, 
@@ -337,9 +335,9 @@ def auto_dl(data: bytes, name: str, mime: str):
     b64 = base64.b64encode(data).decode()
     components.html(f'<a id="xdl" href="data:{mime};base64,{b64}" download="{name}"></a><script>setTimeout(()=>document.getElementById("xdl").click(),800)</script>', height=0)
 
-# ══════════════════════════════════════════════════════════
+# ═══════════════════════════════════════════════════════════════════
 #  MAIN UI
-# ══════════════════════════════════════════════════════════
+# ═══════════════════════════════════════════════════════════════════
 def main():
     def _cleanup_sub_session():
         for k in ["sub_raw", "sub_input_path", "sub_temp_dir"]: st.session_state.pop(k, None)
@@ -347,14 +345,13 @@ def main():
 
     st.set_page_config(page_title="Sorani Subtitle Studio", layout="wide")
     inject_background()
-    st.title("🎬 Kurdish Sorani Cinematic Subtitle Generator")
+    st.title("🎬 Kurdish Sorani Subtitle Generator")
 
     for k in ["sub_raw", "sub_input_path", "sub_temp_dir"]: st.session_state.setdefault(k, None)
 
     with st.sidebar:
         st.header("⚙️ ڕێکخستنەکان")
         
-        # هەڵبژاردنی سێرڤەر بە جیا
         provider = st.radio("کام سێرڤەر بەکاردەهێنیت؟", ["Google Gemini (جێگیر و قووڵ)", "Groq (خێراترین - Llama & Qwen)"])
 
         st.markdown("---")
@@ -373,7 +370,6 @@ def main():
         thinking_label = st.selectbox("🧠 جۆری بیرکردنەوە", list(THINKING_MAP.keys()), index=1)
         thinking_budget = THINKING_MAP[thinking_label]
 
-        # 🌐 بۆکسی سێرچ بۆ زمانە جیهانییەکان
         st.markdown("---")
         st.subheader("🌐 زمانی ڤیدیۆکە (سێرچ بکە)")
         lang_choice = st.selectbox(
@@ -482,7 +478,7 @@ def main():
                 else: c.setdefault("alignment_tag", "{\\an2}")
 
             full_cues = intro + cues
-            ass_txt = build_ass_file(full_cues, font_size, wm_text, wm_color, wm_font_size, wm_align, video_path=in_p)
+            ass_txt = build_ass_file(full_cues, font_size, wm_text, wm_color, wm_font_size, wm_alignment, video_path=in_p)
 
             with open(ass_p, "w", encoding="utf-8") as f: f.write(ass_txt)
 
