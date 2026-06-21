@@ -216,13 +216,13 @@ def transcribe_audio(audio:Path,forced_lang:Optional[str])->list:
     # Pass 2: main transcription WITH VAD
     segs,_=model.transcribe(str(audio),language=lang,
         vad_filter=True,vad_parameters={"min_silence_duration_ms":250},
-        no_speech_threshold=0.20,word_timestamps=True,beam_size=5)
+        no_speech_threshold=0.20,word_timestamps=True,beam_size=3)
     rows=_segs_to_rows(segs)
     # Pass 3: fallback WITHOUT VAD if empty (catches quiet/muted videos)
     if not rows:
         st.warning("⚠️ VAD هیچ دەنگێک نەدۆزی — بەبێ فیلتەر دووبارە هەوڵ دەدەم...")
         segs,_=model.transcribe(str(audio),language=lang,
-            vad_filter=False,no_speech_threshold=0.55,word_timestamps=True,beam_size=5)
+            vad_filter=False,no_speech_threshold=0.55,word_timestamps=True,beam_size=3)
         rows=_segs_to_rows(segs)
     return rows
 
