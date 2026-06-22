@@ -1,163 +1,152 @@
-"""
-ai_translator.py  v5.0
-Kurdish Sorani Subtitle Translator — Simple, Natural, All Lines Guaranteed
-"""
+import google.generativeai as genai
+import re
+import time
 
-import json, re, time, random, logging
-from typing import Optional
-from pydantic import BaseModel
-from google import genai
-from google.genai import types
 
-logging.basicConfig(level=logging.INFO, format="%(levelname)s | %(message)s")
-log = logging.getLogger(__name__)
+def translate_to_kurdish_sorani(
+    subtitles: list[dict],
+    api_key: str,
+    model_name: str = "gemini-1.5-flash",
+    thinking_level: str = "standard",
+) -> list[dict]:
+    """
+    وەرگێڕانی ژێرنووسەکان بۆ کوردی سۆرانی بە Gemini API.
+    subtitles: لیستێک لە dict { index, start, end, text }
+    Returns: هەمان لیست لەگەڵ وەرگێڕان لە 'translated' key.
+    """
+    genai.configure(api_key=api_key)
 
-GEMINI_MODELS = [
-    "gemini-3.5-flash",
-    "gemini-3.1-pro-preview",
-    "gemini-3.1-flash-lite",
-    "gemini-3-flash-preview",
-    "gemini-2.5-pro",
-    "gemini-2.5-flash",
-]
-GEMINI_FALLBACKS = GEMINI_MODELS[:]
+    generation_config = genai.types.GenerationConfig(
+        temperature=0.2 if thinking_level == "standard" else 0.7,
+    )
 
-THINKING_PRESETS: dict = {
-    "Ultra Fast (minimal)": 512,
-    "Balanced (medium)":    4096,
-    "Deep (high)":          16384,
-    "Dynamic (بێ لیمیت)": -1,
-}
+    model = genai.GenerativeModel(
+        model_name=model_name,
+        generation_config=generation_config,
+    )
 
-class SubtitleItem(BaseModel):
-    start: float
-    end:   float
-    text:  str
+    SYSTEM_PROMPT = (
+        "تۆ وەرگێڕێکی پسپۆڕی ئەنیمە و فیلمی کوردی سۆرانییت کە سالیانی زۆری تەجروبەت هەیە. "
+        "ئەرکت ئەوەیە کە ژێرنووسەکان بگەیەنیت بۆ کوردی سۆرانی بەو شێوەیەی کە "
+        "کەسێکی کوردزمانی ئاسایی خۆی بەم شێوەیە قسەی بکات — سادە، ڕوون، و سروشتی. "
+        "\n\n"
+        "دەبێت ئەم ڕێسانە بەتەواوی بیپارێزیت:\n"
+        "١. واتا و هەستی قسەکان بگەیەنە — نەک وشە بە وشە. "
+        "ئەگەر پێکەنین هەیە پێکەنین بگەیەنە، ئەگەر تووڕەیی هەیە تووڕەیی بگەیەنە، "
+        "ئەگەر ئازای هەیە ئازای بگەیەنە.\n"
+        "٢. وشەکان دەبێت سادە و ڕوون بێت — وشەی قورس و کتێبانە بەکار مەیەنێت. "
+        "بە ئەو شێوەیە بنووسە کە منداڵ و گەنج و پیرەکیش تێبگات.\n"
+        "٣. ئەگەر دەقەکە 'God' یان 'Lord' یان 'خدا' یان 'الله' یان 'رب' بوو، "
+        "دەبێت بنووسیت 'فەرمانڕەوا'.\n"
+        "٤. ناوی کەس و شوێن وەک خۆیان بێهێشتەوە، تەنها وەرگێڕی دەوروبەریان بکە.\n"
+        "٥. گۆرانی: نیشانەی ♪ بێهێشتەوە و واتاکەی بگەیەنە بە شێوەیەکی شیعرانە.\n"
+        "٦. هیچ ڕیزێک بەبێ وەرگێڕان مەیەڵێت — هەموو ڕیزێک دەبێت وەرگێڕان بکرێت.\n"
+        "٧. بە هیچ شێوەیەک بە عەرەبی، فارسی، یان ئینگلیزی وەڵام مەدەرەوە.\n"
+        "٨. هیچ خاڵ (.) یان بەند (،) یان نیشانەی خستەسەرەوە (! ؟ : ؛ - …) بەکار مەیەنێت.\n"
+        "تەنها وەرگێڕانەکە بنووسە بەبێ هیچ ڕوونکردنەوە یان زیادەکاری."
+    )
 
-class SubtitleResponse(BaseModel):
-    translations: list[SubtitleItem]
+    results = []
+    batch_size = 30
 
-# ── SIMPLE NATURAL KURDISH SYSTEM PROMPT ─────────────────────────────────────
-SYSTEM_PROMPT = """وەرگێڕی ژێرنووسی کوردی سۆرانی یت. بە کوردیی ئاسایی و سادە وەرگێرە.
+    for i in range(0, len(subtitles), batch_size):
+        batch = subtitles[i : i + batch_size]
+        batch_text = "\n".join(
+            [f"{item['index']}|{item['text']}" for item in batch]
+        )
 
-═══ یاساکانی سەرەکی ═══
+        prompt = (
+            f"{SYSTEM_PROMPT}\n\n"
+            "تەنها وەرگێڕانەکە بنووسە بە فۆرماتی:\n"
+            "ژمارە|وەرگێڕان\n\n"
+            f"تێکستەکان:\n{batch_text}"
+        )
 
-١. کوردیی ڕۆژانەی ئاسایی — وەک گفتوگۆی خۆمانی:
-   "Are you okay?" → "باشیت؟"   ✓     "ئایا حاڵتان باشە؟"   ✗
-   "Let's go!"     → "بڕۆین!"   ✓     "با بەیەک بچین"        ✗
-   "I'm sorry"     → "ببووره"   ✓     "داخم هەیە"            ✗
-   "No way!"       → "ناکرێت!" ✓     "ئەوە ناکرێت بە هیچ شێوەیەک" ✗
-   "What happened?"→ "چیت بوو؟" ✓     "چی ڕووی داوە؟"        ✗
+        translated_batch = _translate_with_retry(model, prompt, batch)
+        results.extend(translated_batch)
 
-٢. کورت و دروست — ئەگەر یەک وشەیە، یەک وشەی کوردی بدەرێت:
-   "Stop!" → "وەستە!" NOT "تکایە وەستان بکە"
-   "Run!"  → "بەجوو!" NOT "خێرا بڕوو"
-   "Liar!" → "درۆکەر!" NOT "تۆ کەسێکی درۆکەری"
+        if i + batch_size < len(subtitles):
+            time.sleep(0.5)
 
-٣. ئەحساس — هەمان هیجانی کارەکتەرەکە بنووسە:
-   تووڕە → وشە و ڕستەی تووڕانە بەکاربهێنە
-   دڵتەنگ → وشەی دڵسۆزانە
-   شۆخ/کێفی → سووک و شادمانە
+    return results
 
-٤. ناوی کارەکتەر + پەیوەندی:
-   هەرگیز -san/-kun/Mr./Mrs. بە کاک/خاتوون مەوەرگێرە لە ئەنیمی
-   تەنها ناوی کارەکتەرەکە بەکاربهێنە
 
-٥. گۆرانی (♪♫): بیوەرگێرە، کورت و شاعیرانە
+def _translate_with_retry(model, prompt: str, batch: list[dict], max_retries: int = 3) -> list[dict]:
+    """
+    Split-Retry لۆژیک: هەوڵدەدات وەرگێڕان بکات، ئەگەر هەڵە هات دووبارە هەوڵ دەداتەوە.
+    """
+    for attempt in range(max_retries):
+        try:
+            response = model.generate_content(prompt)
+            raw = response.text.strip()
+            parsed = _parse_translation_response(raw, batch)
 
-٦. هیچ نووکتەیەک (؟ . ، ! : ؛) لە دەقی کوردیدا مەخەرە
+            # دابینکردنی هەموو ڕیزەکان
+            if len(parsed) == len(batch):
+                return parsed
 
-٧. ژمارەی ڕیزەکانی دەرچوون = ژمارەی ئینپووتەکان بە تەواوی
+            # Split-Retry: ئەگەر ژمارەی ڕیزەکان کەمتر بوو
+            if attempt < max_retries - 1:
+                time.sleep(1)
+                continue
 
-دەرچوون: JSON تەنها — بێ markdown:
-{"translations":[{"start":<num>,"end":<num>,"text":"<کوردی>"},...]}"""
+            # کۆتایی: پڕکردنەوەی ڕیزە کەمبووەکان بە تێکستی ئەسڵی
+            return _fill_missing(parsed, batch)
 
-# ── Helpers ───────────────────────────────────────────────────────────────────
-def _strip(r):
-    r=r.strip()
-    r=re.sub(r"^```(?:json)?\s*","",r)
-    r=re.sub(r"\s*```$","",r)
-    return r.strip()
+        except Exception as e:
+            if attempt < max_retries - 1:
+                time.sleep(2 ** attempt)
+                continue
+            # کۆتاییەکەی هەڵە: بەکارهێنانی تێکستی ئەسڵی
+            return [dict(item, translated=item["text"]) for item in batch]
 
-def _backoff(a): return min(15.0,(2**a)+random.uniform(0.5,2.0))
+    return [dict(item, translated=item["text"]) for item in batch]
 
-def _log(w,msg):
-    log.info(msg)
-    if w:
-        try: w.info(msg)
-        except: pass
 
-def _build_prompt(chunk):
-    items=[{"start":s["start"],"end":s["end"],"text":s["text"]} for s in chunk]
-    return f"وەرگێرە {len(items)} ڕیز بۆ کوردی سۆرانی:\n\n"+json.dumps(items,ensure_ascii=False,indent=2)
+def _remove_punctuation(text: str) -> str:
+    """
+    سڕینەوەی هەموو خاڵ و بەند و نیشانەی خستەسەرەوە لە تێکستی وەرگێڕاودا.
+    ♪ و ♫ بەجێدەمێنێت چونکە بۆ گۆرانی پێویستن.
+    """
+    return re.sub(r"[.،,!؟?:؛;\-–—…\"\'\"\"'']", "", text).strip()
 
-# ── Core Gemini Call ──────────────────────────────────────────────────────────
-def _call_gemini_raw(keys,idx,chunk,budget,model_sel,widget):
-    """Single attempt: call Gemini and return (rows, idx) or raise."""
-    if not keys: raise RuntimeError("کلیلی API نییە.")
-    models=[model_sel]+[m for m in GEMINI_FALLBACKS if m!=model_sel]
-    msg=SYSTEM_PROMPT+"\n\n"+_build_prompt(chunk)
-    expected=len(chunk)
 
-    for model in models:
-        _log(widget,f"[Gemini] ▶ {model}  ({expected} ڕیز)")
-        for attempt in range(10):
-            key=keys[idx%len(keys)]
-            try:
-                client=genai.Client(api_key=key)
-                cfg={"temperature":0.55,"response_mime_type":"application/json",
-                     "response_schema":SubtitleResponse}
-                if budget is not None:
-                    if budget==-1: cfg["thinking_config"]=types.ThinkingConfig(thinking_budget=-1)
-                    elif budget>0: cfg["thinking_config"]=types.ThinkingConfig(thinking_budget=budget)
-                resp=client.models.generate_content(
-                    model=model,
-                    contents=[types.Content(role="user",parts=[types.Part(text=msg)])],
-                    config=types.GenerateContentConfig(**cfg))
-                data=json.loads(_strip(resp.text or ""))
-                rows=data.get("translations",[])
-                if len(rows)!=expected:
-                    raise ValueError(f"Row mismatch {expected}≠{len(rows)}")
-                _log(widget,f"[Gemini] ✅ {model} — {expected} ڕیز")
-                return rows,idx
-            except Exception as exc:
-                s=str(exc)
-                if "429" in s or "quota" in s.lower() or "rate" in s.lower():
-                    idx=(idx+1)%max(len(keys),1)
-                    _log(widget,f"[Gemini] 429 ← کلیل گۆڕدرا (هەوڵ {attempt+1})")
-                    time.sleep(1.5)
-                elif "404" in s or "not found" in s.lower():
-                    _log(widget,f"[Gemini] 404 ← {model} — بەدواییدا"); break
-                elif "Row mismatch" in s and attempt>=4:
-                    raise  # let split-retry handle it
-                else:
-                    wait=_backoff(attempt)
-                    _log(widget,f"[Gemini] هەڵە (هەوڵ {attempt+1}): {s[:60]} | {wait:.1f}s")
-                    time.sleep(wait)
-    raise RuntimeError("هەموو مۆدێلەکان تەواو بوون.")
+def _parse_translation_response(raw: str, batch: list[dict]) -> list[dict]:
+    """
+    پارسکردنی وەڵامی Gemini بۆ دەرخستنی ژمارە و وەرگێڕان.
+    """
+    lines = raw.strip().splitlines()
+    translation_map = {}
 
-# ── Split-Retry: guarantees ALL lines translated ───────────────────────────────
-def _translate_chunk(keys,idx,chunk,budget,model,widget):
-    """Translate chunk. If row-count mismatch → split in half & retry recursively."""
-    if not chunk:
-        return [],idx
-    try:
-        return _call_gemini_raw(keys,idx,chunk,budget,model,widget)
-    except (ValueError, RuntimeError) as e:
-        if len(chunk)==1:
-            # Single segment — can't split, return original text as fallback
-            _log(widget,f"⚠️ یەک سێگمێنت نەوەرگێرا، دەقی ئەصلی بەکار دەهێنرێت")
-            return [{"start":chunk[0]["start"],"end":chunk[0]["end"],"text":chunk[0]["text"]}],idx
-        # Split in half and retry each part
-        mid=len(chunk)//2
-        _log(widget,f"⟳ دووبەش دەکرێت: {len(chunk)} → {mid}+{len(chunk)-mid}")
-        rows1,idx=_translate_chunk(keys,idx,chunk[:mid],budget,model,widget)
-        rows2,idx=_translate_chunk(keys,idx,chunk[mid:],budget,model,widget)
-        return rows1+rows2,idx
+    for line in lines:
+        line = line.strip()
+        if not line:
+            continue
+        # فۆرمات: ژمارە|وەرگێڕان
+        match = re.match(r"^(\d+)\|(.+)$", line)
+        if match:
+            idx = int(match.group(1))
+            text = _remove_punctuation(match.group(2).strip())
+            translation_map[idx] = text
 
-# ── Public API ────────────────────────────────────────────────────────────────
-def ai_translate(gemini_keys,cur_gem_idx,transcript_chunk,thinking_budget,
-                 selected_model,status_msg,ctx_before=None,ctx_after=None):
-    if not transcript_chunk: return [],cur_gem_idx
-    return _translate_chunk(gemini_keys,cur_gem_idx,transcript_chunk,
-                            thinking_budget,selected_model,status_msg)
+    result = []
+    for item in batch:
+        idx = item["index"]
+        translated = translation_map.get(idx, item["text"])
+        result.append(dict(item, translated=translated))
+
+    return result
+
+
+def _fill_missing(parsed: list[dict], batch: list[dict]) -> list[dict]:
+    """
+    پڕکردنەوەی ڕیزە کەمبووەکان بە تێکستی ئەسڵی.
+    """
+    parsed_map = {item["index"]: item for item in parsed}
+    result = []
+    for item in batch:
+        if item["index"] in parsed_map:
+            result.append(parsed_map[item["index"]])
+        else:
+            result.append(dict(item, translated=item["text"]))
+    return result
