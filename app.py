@@ -44,7 +44,7 @@ with st.sidebar:
         selected_font_name = ""
         selected_font_path = ""
 
-    font_size = st.slider("قەبارەی فۆنتی ژێرنووس", 14, 40, 22)
+    font_size = st.slider("قەبارەی فۆنتی ژێرنووس", 14, 65, 52)
 
     # --- مۆدێل و ئاستی بیرکردنەوە (تەنها فلاش) ---
     st.subheader("🤖 مۆدێلی Gemini (Flash)")
