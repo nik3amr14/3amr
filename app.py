@@ -8,90 +8,36 @@ from pathlib import Path
 from faster_whisper import WhisperModel
 from ai_translator import translate_to_kurdish_sorani
 
-# 
-# 
-# 
-# 
-# 
-# 
-# 
-# 
-# 
-
 st.set_page_config(
     page_title="Kurdish Sorani Subtitle Generator",
-    page_icon="",
+    page_icon="🎬",
     layout="wide",
 )
 
 st.title("Kurdish Sorani Cinematic Subtitle Generator")
-st.caption("v7.0 - Powered by Faster-Whisper & Google Gemini")
-
-# 
-# 
-# 
-# 
-# 
-# 
-# 
-# 
-# 
+st.caption("v7.0 - Powered by Faster-Whisper & Google Gemini (Flash Only)")
 
 BASE_DIR = Path(__file__).parent
 font_files = sorted(glob.glob(str(BASE_DIR / "*.ttf")))
 font_names = [Path(f).stem for f in font_files]
 font_map = dict(zip(font_names, font_files))
 
-# 
-# 
-# 
-# 
-# 
-# 
-# 
-# 
-# 
-# Sidebar
-# 
-# 
 with st.sidebar:
-    st.header("")
+    st.header("ڕێکخستنەکان")
 
-    # 
-    # 
-    # 
-    # 
-    # 
-    # 
-    # 
-    # 
-    # 
-    # API Key ---
-    api_key = st.text_input("Gemini API Key", type="password")
+    # --- پێنج کلیلەکانی Gemini ---
+    st.subheader("🔑 کلیلەکانی Gemini (5 کلیل)")
+    key1 = st.text_input("کلیلی ١", type="password")
+    key2 = st.text_input("کلیلی ٢", type="password")
+    key3 = st.text_input("کلیلی ٣", type="password")
+    key4 = st.text_input("کلیلی ٤", type="password")
+    key5 = st.text_input("کلیلی ٥", type="password")
+    api_keys = [k for k in [key1, key2, key3, key4, key5] if k.strip()]
 
-    # 
-    # 
-    # 
-    # 
-    # 
-    # 
-    # 
-    # 
-    # 
-    # font ---
-    st.subheader("")
-
-    # 
-    # 
-    # 
-    # 
-    # 
-    # 
-    # 
-    # 
-    # 
+    # --- فۆنت ---
+    st.subheader("✍️ فۆنت")
     if font_names:
-        selected_font_name = st.selectbox("", font_names, index=0)
+        selected_font_name = st.selectbox("فۆنتی هەڵبژێرە", font_names, index=0)
         selected_font_path = font_map[selected_font_name]
     else:
         st.warning("هیچ فایلێکی .ttf نەدۆزرایەوە")
@@ -100,24 +46,15 @@ with st.sidebar:
 
     font_size = st.slider("قەبارەی فۆنتی ژێرنووس", 14, 40, 22)
 
-    # --- مۆدێل و ئاستی بیرکردنەوە ---
-    st.subheader("مۆدێل")
-
-    # -------------------------------------------------------------------------
-    # گۆڕانکاری تەنها لەم ڕیزەی خوارەوەدا کراوە (مۆدێلە نوێیەکان زیاد کراون)
-    # -------------------------------------------------------------------------
+    # --- مۆدێل و ئاستی بیرکردنەوە (تەنها فلاش) ---
+    st.subheader("🤖 مۆدێلی Gemini (Flash)")
     gemini_model = st.selectbox(
         "مۆدێلی",
         [
-            "gemini-1.5-flash",
-            "gemini-1.5-pro",
-            "gemini-2.0-flash",
             "gemini-3.5-flash",
             "gemini-3.1-flash-lite",
             "gemini-3-flash-preview",
             "gemini-2.5-flash",
-            "gemini-2.5-pro",
-            "gemini-3.1-pro-preview"
         ],
         index=0,
     )
@@ -129,7 +66,7 @@ with st.sidebar:
     )
 
     # --- ڕەنگەکان ---
-    st.subheader("ڕەنگەکان")
+    st.subheader("🎨 ڕەنگەکان")
     color_normal = st.color_picker("ڕەنگی ژێرنووسی ئاسایی", "#FFFFFF")
     color_song = st.color_picker("ڕەنگی گۆرانی", "#FFD700")
     color_translator = st.color_picker("ڕەنگی ناوی وەرگێڕ", "#00FF00")
@@ -137,32 +74,32 @@ with st.sidebar:
     color_logo = st.color_picker("ڕەنگی لۆگۆ/واتەرمارک", "#CCCCCC")
 
     # --- ناوی ئەنیمە ---
-    st.subheader("ناوی ئەنیمە / فیلم")
+    st.subheader("📺 ناوی ئەنیمە / فیلم")
     anime_name = st.text_input("ناوی ئەنیمە/فیلم", "")
     anime_start = st.text_input("کاتی دەستپێک (ئەنیمە)", "0:00:00.00")
     anime_end = st.text_input("کاتی کۆتایی (ئەنیمە)", "0:00:05.00")
     anime_color = st.color_picker("ڕەنگی ناوی ئەنیمە", "#FFFFFF")
 
     # --- ناوی وەرگێڕ ---
-    st.subheader("ناوی وەرگێڕ")
+    st.subheader("✍️ ناوی وەرگێڕ")
     translator_name = st.text_input("ناوی وەرگێڕ", "")
     trans_start = st.text_input("کاتی دەستپێک (وەرگێڕ)", "0:00:00.00")
     trans_end = st.text_input("کاتی کۆتایی (وەرگێڕ)", "0:00:05.00")
 
     # --- ناوی تەکنیک ---
-    st.subheader("ناوی تەکنیک / پێشکەشکار")
+    st.subheader("🛠️ ناوی تەکنیک / پێشکەشکار")
     tech_name = st.text_input("ناوی تەکنیک", "")
     tech_start = st.text_input("کاتی دەستپێک (تەکنیک)", "0:00:00.00")
     tech_end = st.text_input("کاتی کۆتایی (تەکنیک)", "0:00:05.00")
 
     # --- لۆگۆ/واتەرمارک ---
-    st.subheader("لۆگۆ / واتەرمارک")
+    st.subheader("💧 لۆگۆ / واتەرمارک")
     logo_text = st.text_input("تێکستی لۆگۆ", "")
     logo_pos = st.selectbox("شوێنی لۆگۆ", ["چەپ", "ناوەڕاست", "ڕاست"], index=2)
     logo_size = st.slider("قەبارەی لۆگۆ", 10, 30, 14)
 
     # --- مۆدێلی Whisper ---
-    st.subheader("Whisper")
+    st.subheader("🎙️ Whisper")
     whisper_model_size = st.selectbox(
         "مۆدێلی Whisper",
         ["large-v3-turbo", "large-v3", "medium", "small"],
@@ -173,7 +110,6 @@ with st.sidebar:
 # پارامێتەرەکانی ڕەنگ
 # ============================================================
 def hex_to_ass_color(hex_color: str) -> str:
-    """گۆڕینی ڕەنگی HEX بۆ فۆرماتی ASS (&H00BBGGRR)"""
     hex_color = hex_color.lstrip("#")
     r = int(hex_color[0:2], 16)
     g = int(hex_color[2:4], 16)
@@ -286,7 +222,6 @@ def seconds_to_ass_time(seconds: float) -> str:
 # دەرهێنانی ژێرنووس لە Whisper
 # ============================================================
 def snap_timings(segments: list[dict], gap_threshold: float = 0.4) -> list[dict]:
-    """کاتی کۆتایی هەر سێگمێنت دەچەسپێت بە دەستپێکی ئەوی داهاتوو گەر بۆ gap_threshold نێوانیان کەمتر بوو"""
     if len(segments) < 2:
         return segments
 
@@ -300,7 +235,6 @@ def snap_timings(segments: list[dict], gap_threshold: float = 0.4) -> list[dict]
     return result
 
 def transcribe_audio(audio_path: str, model_size: str) -> list[dict]:
-    """دەرهێنانی ژێرنووسەکان بەبێ جێهێشتنی هیچ کامێک"""
     model = WhisperModel(model_size, device="cpu", compute_type="int8")
     segments_iter, _ = model.transcribe(
         audio_path,
@@ -348,10 +282,6 @@ def transcribe_audio(audio_path: str, model_size: str) -> list[dict]:
 # داکیراندنی ژێرنووس بۆ ناو ڤیدیۆ
 # ============================================================
 def burn_subtitles(video_path: str, ass_path: str, output_path: str, font_dir: str) -> bool:
-    """
-    -c:v copy ناتوانرێت بەکاربێت چونکە ASS burn-in پێویستی بە re-encode هەیە.
-    -crf 18 + -preset fast کوالیتی نزیک بە ئەسل دەدات بەبێ زیادبوونی قەبارە.
-    """
     cmd = [
         "ffmpeg", "-y",
         "-i", video_path,
@@ -388,7 +318,7 @@ if uploaded_file is not None:
 
 if uploaded_file:
     st.video(uploaded_file)
-    can_start = bool(api_key) and bool(selected_font_path)
+    can_start = bool(api_keys) and bool(selected_font_path)
     start_btn = st.button("دەستپێک", disabled=not bool(can_start))
 
     if start_btn:
@@ -415,10 +345,10 @@ if uploaded_file:
                 st.session_state["subtitles_raw"] = subtitles
                 st.write(f"ڕیزە ژێرنووسەکان دۆزرانەوە: {len(subtitles)}")
 
-                # 3. وەرگێڕان (بە ناردن بۆ Gemini)
+                # 3. وەرگێڕان بۆ کوردی سۆرانی
                 st.write("وەرگێڕان بۆ کوردی سۆرانی...")
                 translated = translate_to_kurdish_sorani(
-                    subtitles, api_key, gemini_model, thinking_level
+                    subtitles, api_keys, gemini_model, thinking_level
                 )
                 st.session_state["subtitles_translated"] = translated
                 st.write("وەرگێڕان تەواو بوو!")
