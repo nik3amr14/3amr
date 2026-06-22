@@ -2,59 +2,45 @@ import google.generativeai as genai
 import re
 import time
 
-
 def translate_to_kurdish_sorani(
     subtitles: list[dict],
-    api_key: str,
+    api_keys: list,
     model_name: str = "gemini-1.5-flash",
     thinking_level: str = "standard",
 ) -> list[dict]:
     """
-    وەرگێڕانی ژێرنووسەکان بۆ کوردی سۆرانی بە Gemini API.
-    subtitles: لیستێک لە dict { index, start, end, text }
-    Returns: هەمان لیست لەگەڵ وەرگێڕان لە 'translated' key.
+    وەرگێڕدانی ژێرنووسەکان بۆ کوردی سۆرانی بە 5 کلیل
+    subtitles: dict { index, start, end, text }
+    Returns: هەمان لیست لەگەڵ وەرگێڕدان لە "translated"
     """
-    genai.configure(api_key=api_key)
-
-    generation_config = genai.types.GenerationConfig(
-        temperature=0.2 if thinking_level == "standard" else 0.7,
-    )
-
-    model = genai.GenerativeModel(
-        model_name=model_name,
-        generation_config=generation_config,
-    )
 
     SYSTEM_PROMPT = (
-        "تۆ وەرگێڕێکی پسپۆڕی ئەنیمە و فیلمی کوردی سۆرانییت کە سالیانی زۆری تەجروبەت هەیە. "
-        "ئەرکت ئەوەیە کە ژێرنووسەکان بگەیەنیت بۆ کوردی سۆرانی بەو شێوەیەی کە "
-        "کەسێکی کوردزمانی ئاسایی خۆی بەم شێوەیە قسەی بکات — سادە، ڕوون، و سروشتی. "
+        "ډېټۍ پېسپۍ دەنېمە و فيلمۍ کوردی سۆرانېيټ کە ساليانۍ زۆری تەجروبەت هەيە "
         "\n\n"
-        "دەبێت ئەم ڕێسانە بەتەواوی بیپارێزیت:\n"
-        "١. واتا و هەستی قسەکان بگەیەنە — نەک وشە بە وشە. "
-        "ئەگەر پێکەنین هەیە پێکەنین بگەیەنە، ئەگەر تووڕەیی هەیە تووڕەیی بگەیەنە، "
-        "ئەگەر ئازای هەیە ئازای بگەیەنە.\n"
-        "٢. وشەکان دەبێت سادە و ڕوون بێت — وشەی قورس و کتێبانە بەکار مەیەنێت. "
-        "بە ئەو شێوەیە بنووسە کە منداڵ و گەنج و پیرەکیش تێبگات.\n"
-        "٣. ئەگەر دەقەکە 'God' یان 'Lord' یان 'خدا' یان 'الله' یان 'رب' بوو، "
-        "دەبێت بنووسیت 'فەرمانڕەوا'.\n"
-        "٤. ناوی کەس و شوێن وەک خۆیان بێهێشتەوە، تەنها وەرگێڕی دەوروبەریان بکە.\n"
-        "٥. گۆرانی: نیشانەی ♪ بێهێشتەوە و واتاکەی بگەیەنە بە شێوەیەکی شیعرانە.\n"
-        "٦. هیچ ڕیزێک بەبێ وەرگێڕان مەیەڵێت — هەموو ڕیزێک دەبێت وەرگێڕان بکرێت.\n"
-        "٧. بە هیچ شێوەیەک بە عەرەبی، فارسی، یان ئینگلیزی وەڵام مەدەرەوە.\n"
-        "٨. هیچ خاڵ (.) یان بەند (،) یان نیشانەی خستەسەرەوە (! ؟ : ؛ - …) بەکار مەیەنێت.\n"
-        "تەنها وەرگێڕانەکە بنووسە بەبێ هیچ ڕوونکردنەوە یان زیادەکاری."
+        "دەبێت ئەم ڕێسانە بەتەواوی بپارێزیت:\n"
+        "1. واتا و هەستی قەسەکان بگەیەنە – نەک وشە بە وشە. ئەگەر پێکەنین هەیە پێکەنین بگەیەنە، ئەگەر تووڕەیی هەیە تووڕەیی بگەیەنە"
+        "\n"
+        "2. وشەکان دەبێت سادە و ڕوون بێت – وشەی قورس و کتێبانە بەکار مەینێت. بە ئەو شێوەیە بنووسە کە منداڵ و گەنج و پیرەکیش تێبگات"
+        "\n"
+        "3. ئەگەر دەقەکە 'Lord' یان 'God' بوو، دەبێت بنووسیت 'فەرمانڕەوا'"
+        "\n"
+        "4. ناوی کەس و شوێن وەک خۆیان بەهێشەوە، تەنها وەرگێڕی دەوروبەریان بکە"
+        "\n"
+        "5. گۆرانی: نیشانەی 🎵 بەهێشەوە و واتاکەی بگەیەنە بە شێوەیەکی شیعرانە"
+        "\n"
+        "6. هیچ ڕیزێک بەبێ وەرگێڕان مەیدەڵێت – هەموو ڕیزێک دەبێت وەرگێڕان بکرێت"
+        "\n"
+        "7. بە هیچ شێوەیەک بە عەرەبی، فارسی، یان ئینگلیزی وەڵام مەدەرەوە. خاڵ (.) یان بەند (،) یان نیشانەی خستەڕووە (؟ ! . - : ، ) بەکار مەهێنێت. تەنها وەرگێڕانەکە بنووسە بەبێ هیچ ڕوونکردنەوە یان زیادەکار."
     )
 
     results = []
-    batch_size = 50   # زیادکرا لە 30 بۆ 50
+    batch_size = 50
 
     for i in range(0, len(subtitles), batch_size):
         batch = subtitles[i : i + batch_size]
         batch_text = "\n".join(
             [f"{item['index']}|{item['text']}" for item in batch]
         )
-
         prompt = (
             f"{SYSTEM_PROMPT}\n\n"
             "تەنها وەرگێڕانەکە بنووسە بە فۆرماتی:\n"
@@ -62,58 +48,62 @@ def translate_to_kurdish_sorani(
             f"تێکستەکان:\n{batch_text}"
         )
 
-        translated_batch = _translate_with_retry(model, prompt, batch)
+        translated_batch = _translate_batch_with_keys(
+            prompt, batch, api_keys, model_name, thinking_level
+        )
         results.extend(translated_batch)
 
         if i + batch_size < len(subtitles):
-            time.sleep(0.2)   # کەمکرا لە 0.5 بۆ 0.2
+            time.sleep(0.2)
 
     return results
 
 
-def _translate_with_retry(model, prompt: str, batch: list[dict], max_retries: int = 3) -> list[dict]:
+def _translate_batch_with_keys(prompt, batch, api_keys, model_name, thinking_level, max_retries: int = 3):
     """
-    Split-Retry لۆژیک: هەوڵدەدات وەرگێڕان بکات، ئەگەر هەڵە هات دووبارە هەوڵ دەداتەوە.
+    هەوڵداندن بە پێنج کلیل بۆ وەرگێڕانی بەشێک. 
+    ئەگەر کلیلێک شکست هێنا، دەچێتە سەر کلیلی داهاتوو.
     """
     for attempt in range(max_retries):
-        try:
-            response = model.generate_content(prompt)
-            raw = response.text.strip()
-            parsed = _parse_translation_response(raw, batch)
+        for api_key in api_keys:
+            try:
+                genai.configure(api_key=api_key)
+                generation_config = genai.types.GenerationConfig(
+                    temperature=0.2 if thinking_level == "standard" else 0.7,
+                )
+                model = genai.GenerativeModel(
+                    model_name=model_name,
+                    generation_config=generation_config,
+                )
+                response = model.generate_content(prompt)
+                raw = response.text.strip()
+                parsed = _parse_translation_response(raw, batch)
+                
+                # دەستنیشانکردنی هەموو ڕیزەکان
+                if len(parsed) == len(batch):
+                    return parsed
 
-            # دابینکردنی هەموو ڕیزەکان
-            if len(parsed) == len(batch):
-                return parsed
+            except Exception:
+                continue # ڕوو لە کلیلی داهاتوو بکە
 
-            # Split-Retry: ئەگەر ژمارەی ڕیزەکان کەمتر بوو
-            if attempt < max_retries - 1:
-                time.sleep(1)
-                continue
+        # ئەگەر هەر 5 کلیلەکە شکستیان هێنا، کەمێک چاوەڕوان بکە و هەوڵبدەرەوە
+        time.sleep(2 * (attempt + 1))
 
-            # کۆتایی: پڕکردنەوەی ڕیزە کەمبووەکان بە تێکستی ئەسڵی
-            return _fill_missing(parsed, batch)
-
-        except Exception as e:
-            if attempt < max_retries - 1:
-                time.sleep(2 ** attempt)
-                continue
-            # کۆتاییەکەی هەڵە: بەکارهێنانی تێکستی ئەسڵی
-            return [dict(item, translated=item["text"]) for item in batch]
-
-    return [dict(item, translated=item["text"]) for item in batch]
+    # کۆتایی: ئەگەر هەموو کلیلەکان شکستیان هێنا، دەقی ڕەسەن بەکاربهێنە
+    return _fill_missing([], batch)
 
 
 def _remove_punctuation(text: str) -> str:
     """
-    سڕینەوەی هەموو خاڵ و بەند و نیشانەی خستەسەرەوە لە تێکستی وەرگێڕاودا.
-    ♪ و ♫ بەجێدەمێنێت چونکە بۆ گۆرانی پێویستن.
+    سڕینەوەی هەموو خاڵ و بەند و نیشانەی خستەڕوو لە تێکستی وەرگێڕدراو!
+    وە بەجێهێشتنی ڕێزەکان لە گۆرانی پێویستن.
     """
-    return re.sub(r"[.،,!؟?:؛;\-–—…\"\'\"\"'']", "", text).strip()
+    return re.sub(r"[.,!?:;—-—\"''`()]", "", text).strip()
 
 
 def _parse_translation_response(raw: str, batch: list[dict]) -> list[dict]:
     """
-    پارسکردنی وەڵامی Gemini بۆ دەرخستنی ژمارە و وەرگێڕان.
+    پارسکردنی ژمارە و وەرگێڕان لە دەرئەنجامی Gemini بۆ ناو لیست.
     """
     lines = raw.strip().splitlines()
     translation_map = {}
@@ -140,7 +130,7 @@ def _parse_translation_response(raw: str, batch: list[dict]) -> list[dict]:
 
 def _fill_missing(parsed: list[dict], batch: list[dict]) -> list[dict]:
     """
-    پڕکردنەوەی ڕیزە کەمبووەکان بە تێکستی ئەسڵی.
+    پڕکردنەوەی ڕیزە کەمبووەکان بە تێکستی ڕەسەلی.
     """
     parsed_map = {item["index"]: item for item in parsed}
     result = []
