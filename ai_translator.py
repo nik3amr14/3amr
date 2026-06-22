@@ -47,7 +47,7 @@ def translate_to_kurdish_sorani(
     )
 
     results = []
-    batch_size = 30
+    batch_size = 50   # زیادکرا لە 30 بۆ 50
 
     for i in range(0, len(subtitles), batch_size):
         batch = subtitles[i : i + batch_size]
@@ -66,7 +66,7 @@ def translate_to_kurdish_sorani(
         results.extend(translated_batch)
 
         if i + batch_size < len(subtitles):
-            time.sleep(0.5)
+            time.sleep(0.2)   # کەمکرا لە 0.5 بۆ 0.2
 
     return results
 
